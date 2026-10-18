@@ -18,6 +18,18 @@ function message(element, text, good = false) {
   element.classList.toggle("is-good", good);
 }
 
+function confirmAction(title, copy, action) {
+  const dialog = $("#confirm-dialog");
+  $("#confirm-title").textContent = title;
+  $("#confirm-copy").textContent = copy;
+  $("#confirm-proceed").textContent = action;
+  dialog.returnValue = "";
+  return new Promise((resolve) => {
+    dialog.addEventListener("close", () => resolve(dialog.returnValue === "confirm"), { once: true });
+    dialog.showModal();
+  });
+}
+
 function stopSpeech() {
   const finish = state.speechCancel;
   const audio = state.speechAudio;
@@ -97,6 +109,17 @@ function showStudio(email) {
   $("#account-email").textContent = email;
 }
 
+function showSetup() {
+  $("#setup-view").hidden = false;
+  $("#owner-workspace").hidden = true;
+  $("#return-assistant").hidden = !state.active;
+}
+
+function showWorkspace() {
+  $("#setup-view").hidden = true;
+  $("#owner-workspace").hidden = false;
+}
+
 function assistantButton(item) {
   const button = document.createElement("button");
   button.type = "button";
@@ -114,9 +137,8 @@ async function loadAssistants(selectId) {
   if (selectId) return openAssistant(selectId);
   if (state.active && state.assistants.some((item) => item.id === state.active.id)) return openAssistant(state.active.id);
   if (state.assistants.length) return openAssistant(state.assistants[0].id);
-  const created = await api("/api/assistants", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "My knowledge assistant" }) });
-  state.assistants.unshift(created);
-  return loadAssistants(created.id);
+  state.active = null;
+  showSetup();
 }
 
 function sourceElement(source) {
@@ -144,7 +166,9 @@ function sourceElement(source) {
   title.append(document.createTextNode(source.name));
   const kind = document.createElement("span");
   kind.className = "source-kind";
-  kind.textContent = `${source.kind === "website" ? "Website page" : "Document"} · ${source.approved ? "Approved" : "Needs review"}`;
+  const sampleSource = Boolean(source.metadata?.sample_id);
+  const slideCount = source.sections?.length || 0;
+  kind.textContent = `${sampleSource ? `Fictional sample · ${slideCount} slides` : source.kind === "website" ? "Website page" : "Document"} · ${source.approved ? "Approved" : "Needs review"}`;
   title.append(kind);
   const actions = document.createElement("div");
   actions.className = "source-actions";
@@ -153,7 +177,7 @@ function sourceElement(source) {
   remove.textContent = "Remove";
   remove.setAttribute("aria-label", `Remove ${source.name}`);
   remove.addEventListener("click", async () => {
-    if (!confirm(`Remove “${source.name}” from this assistant?`)) return;
+    if (!await confirmAction("Remove this source?", `Remove “${source.name}” from this assistant?`, "Remove source")) return;
     try { await api(`/api/assistants/${state.active.id}/sources/${source.id}`, { method: "DELETE" }); await refreshAssistant(); }
     catch (error) { message($("#source-message"), error.message); }
   });
@@ -255,12 +279,12 @@ async function createSampleAssistant(template, button) {
   button.disabled = true;
   const label = button.textContent;
   button.textContent = "Creating…";
-  message($("#source-message"), `Preparing ${template.name} with its sample sources…`);
+  message($($("#setup-view").hidden ? "#source-message" : "#setup-message"), `Preparing ${template.name} with its sample sources…`);
   try {
     const created = await api(`/api/assistants/from-sample/${encodeURIComponent(template.id)}`, { method: "POST" });
     await loadAssistants(created.id);
     message($("#source-message"), `Created ${template.name}. Review and approve each source before asking questions.`, true);
-  } catch (error) { message($("#source-message"), error.message); }
+  } catch (error) { message($($("#setup-view").hidden ? "#source-message" : "#setup-message"), error.message); }
   finally { button.disabled = false; button.textContent = label; }
 }
 
@@ -278,7 +302,7 @@ async function loadStarterSamples() {
       card.className = "starter-template-card";
       const audience = document.createElement("span");
       audience.className = "starter-template-audience";
-      audience.textContent = `${template.audience} · ${template.sample_ids.length} sample source${template.sample_ids.length === 1 ? "" : "s"}`;
+      audience.textContent = `${template.audience} · ${template.sample_ids.length} sample document${template.sample_ids.length === 1 ? "" : "s"}`;
       const title = document.createElement("strong");
       title.textContent = template.name;
       const description = document.createElement("p");
@@ -292,8 +316,8 @@ async function loadStarterSamples() {
       });
       const create = document.createElement("button");
       create.type = "button";
-      create.className = "secondary-button";
-      create.textContent = "Create this assistant ↗";
+      create.className = "primary-button";
+      create.textContent = "Try this assistant →";
       create.setAttribute("aria-label", `Create ${template.name} sample assistant`);
       create.addEventListener("click", () => { void createSampleAssistant(template, create); });
       card.append(audience, title, description, questions, create);
@@ -344,6 +368,7 @@ function setSharePanel(assistant) {
 
 async function openAssistant(id) {
   const assistant = await api(`/api/assistants/${id}`);
+  showWorkspace();
   state.active = assistant;
   state.history = [];
   $("#assistant-list").replaceChildren(...state.assistants.map(assistantButton));
@@ -596,6 +621,17 @@ async function initialize() {
   void loadStarterSamples();
   $("#login-tab").addEventListener("click", () => showAuth("login"));
   $("#register-tab").addEventListener("click", () => showAuth("register"));
+  $("#explore-samples").addEventListener("click", showSetup);
+  $("#return-assistant").addEventListener("click", showWorkspace);
+  $("#create-blank-assistant").addEventListener("click", async (event) => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    try {
+      const created = await api("/api/assistants", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "My knowledge assistant" }) });
+      await loadAssistants(created.id);
+    } catch (error) { message($("#setup-message"), error.message); }
+    finally { button.disabled = false; }
+  });
   $("#auth-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     const action = state.mode === "login" ? "login" : "register";
@@ -614,7 +650,7 @@ async function initialize() {
     event.preventDefault();
     const name = $("#new-assistant-name").value.trim(); if (!name) return;
     try { const created = await api("/api/assistants", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) }); $("#new-assistant-name").value = ""; await loadAssistants(created.id); }
-    catch (error) { message($("#source-message"), error.message); }
+    catch (error) { message($($("#setup-view").hidden ? "#source-message" : "#setup-message"), error.message); }
   });
   $("#assistant-name").addEventListener("change", async () => {
     if (!state.active || !$("#assistant-name").value.trim()) return;
@@ -622,7 +658,7 @@ async function initialize() {
     catch (error) { message($("#source-message"), error.message); }
   });
   $("#delete-assistant").addEventListener("click", async () => {
-    if (!state.active || !confirm(`Delete “${state.active.name}”, its sources, and its published link? This cannot be undone.`)) return;
+    if (!state.active || !await confirmAction("Delete this assistant?", `Delete “${state.active.name}”, its sources, and its published link? This cannot be undone.`, "Delete assistant")) return;
     try { await api(`/api/assistants/${state.active.id}`, { method: "DELETE" }); state.active = null; await loadAssistants(); }
     catch (error) { message($("#source-message"), error.message); }
   });
@@ -659,13 +695,13 @@ async function initialize() {
   document.querySelectorAll("[data-prompt]").forEach((button) => button.addEventListener("click", () => { $("#question-input").value = button.dataset.prompt; $("#question-form").requestSubmit(); }));
   bindVoice("#voice-question", "#question-input", "#question-form", "#question-message");
   $("#publish-assistant").addEventListener("click", async () => {
-    if (!confirm("Anyone with the link can ask questions from a snapshot of all approved sources. Publish this snapshot?")) return;
+    if (!await confirmAction("Publish this assistant?", "Anyone with the link can ask questions from a snapshot of all approved sources.", "Publish snapshot")) return;
     try { const result = await api(`/api/assistants/${state.active.id}/publish`, { method: "POST" }); state.shareUrl = new URL(result.url, location.origin).href; storeShareUrl(state.active.id, state.shareUrl); await loadAssistants(state.active.id); message($("#source-message"), "Approved source snapshot published.", true); }
     catch (error) { message($("#source-message"), error.message); }
   });
   $("#copy-share").addEventListener("click", async () => { try { await navigator.clipboard.writeText($("#share-url").value); $("#copy-share").textContent = "Copied"; setTimeout(() => { $("#copy-share").textContent = "Copy link"; }, 1600); } catch (_) { $("#share-url").select(); document.execCommand("copy"); } });
   $("#unpublish-assistant").addEventListener("click", async () => {
-    if (!confirm("Revoke the public link now? People with it will no longer be able to open this assistant.")) return;
+    if (!await confirmAction("Revoke this link?", "People with this link will no longer be able to open the assistant.", "Revoke link")) return;
     try { await api(`/api/assistants/${state.active.id}/publish`, { method: "DELETE" }); await loadAssistants(state.active.id); message($("#source-message"), "The public link has been revoked.", true); }
     catch (error) { message($("#source-message"), error.message); }
   });

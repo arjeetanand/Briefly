@@ -2,7 +2,7 @@
 // Requires the project's Python venv and a local Chrome installation.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -52,11 +52,9 @@ function silentWav() {
   return wav.toString("base64");
 }
 
-test("typed evidence and a full voice turn in Chrome", { timeout: 90000 }, async () => {
+test("voice plus a private sample assistant from setup through published revocation", { timeout: 120000 }, async () => {
   const [appPort, debugPort] = await freePorts(2);
   const profile = await mkdtemp(join(tmpdir(), "pitchroom-e2e-"));
-  const sourcePath = join(profile, "returns.txt");
-  await writeFile(sourcePath, "Refunds are accepted for 30 days after purchase. Contact support@example.com for help.\n");
   const server = spawn(join(root, ".venv/bin/python"), ["-m", "uvicorn", "app:app", "--host", "127.0.0.1", "--port", String(appPort)], {
     cwd: join(root, "backend"),
     env: { ...process.env, TTS_PROVIDER: "browser", ANSWER_GENERATION_PROVIDER: "extractive", PITCHROOM_ACCESS_TOKEN: "", PITCHROOM_DATABASE_PATH: join(profile, "studio.sqlite3") },
@@ -209,35 +207,85 @@ test("typed evidence and a full voice turn in Chrome", { timeout: 90000 }, async
       document.querySelector('#auth-password').value = 'a-unique-e2e-password';
       document.querySelector('#auth-form').requestSubmit();
     `);
-    await until(() => evaluate("!document.querySelector('#studio-view').hidden && document.querySelectorAll('#assistant-list button').length === 1"));
-    await evaluate("window.confirm = () => true");
-    await call("DOM.enable");
-    const documentNode = await call("DOM.getDocument", { depth: -1 });
-    const sourceInput = await call("DOM.querySelector", { nodeId: documentNode.root.nodeId, selector: "#source-file" });
-    await call("DOM.setFileInputFiles", { nodeId: sourceInput.nodeId, files: [sourcePath] });
-    await evaluate("document.querySelector('#source-file').dispatchEvent(new Event('change', { bubbles: true }))");
-    await until(() => evaluate("document.querySelectorAll('.source-item').length === 1 && document.querySelector('.source-kind').textContent.includes('Needs review')"));
-    await evaluate("document.querySelector('.source-check').click()");
-    await until(() => evaluate("document.querySelector('.source-kind').textContent.includes('Approved')"));
+    await until(() => evaluate("!document.querySelector('#studio-view').hidden && document.querySelectorAll('#assistant-list button').length === 0 && !document.querySelector('#setup-view').hidden"));
+    await until(() => evaluate("document.querySelectorAll('#starter-template-list .starter-template-card').length === 3"));
+    assert.match(await evaluate("document.querySelector('#setup-title').textContent"), /your sources/i);
+    assert.match(await evaluate("document.querySelector('.sample-disclosure').textContent"), /Fictional/);
+    await call("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
+    await until(() => evaluate("window.innerWidth === 390"));
+    assert.equal(await evaluate("getComputedStyle(document.querySelector('#starter-template-list')).gridTemplateColumns.split(' ').length"), 1);
+    assert.ok(await evaluate("document.documentElement.scrollWidth <= window.innerWidth"));
+    await call("Emulation.setDeviceMetricsOverride", { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
+    await until(() => evaluate("window.innerWidth === 1440"));
+    await evaluate("document.querySelector('#starter-template-list .primary-button').focus()");
+    assert.equal(await evaluate("document.activeElement === document.querySelector('#starter-template-list .primary-button')"), true);
+    await call("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
+    await call("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
+    await until(() => evaluate("document.querySelectorAll('#assistant-list button').length === 1 && document.querySelectorAll('.source-item').length === 2"));
+    assert.equal(await evaluate("document.querySelector('#setup-view').hidden"), true);
+    assert.equal(await evaluate("[...document.querySelectorAll('.source-check')].every((item) => !item.checked)"), true);
+    const assistantId = await evaluate("document.querySelector('.source-check')?.closest('.source-item') && document.querySelector('#assistant-list button').getAttribute('aria-current') === 'true' ? document.querySelector('#assistant-name').value : ''");
+    assert.equal(assistantId, "Team & onboarding guide");
+    const beforeApproval = await evaluate(`(async () => {
+      const button = document.querySelector('#assistant-list button[aria-current="true"]');
+      const response = await fetch('/api/assistants', { credentials: 'same-origin' });
+      const items = await response.json();
+      const active = items.find((item) => item.name === button.textContent);
+      return (await fetch('/api/assistants/' + active.id + '/answer', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question: 'How do I request system access?' }) })).status;
+    })()`);
+    assert.equal(beforeApproval, 409);
+    await evaluate("document.querySelectorAll('.source-check')[0].click()");
+    await until(() => evaluate("document.querySelectorAll('.source-kind')[0].textContent.includes('Approved')"));
+    await evaluate("document.querySelectorAll('.source-check')[1].click()");
+    await until(() => evaluate("[...document.querySelectorAll('.source-kind')].every((item) => item.textContent.includes('Approved'))"));
+    await until(() => evaluate("[...document.querySelectorAll('#conversation .prompt-chips button')].some((button) => button.textContent === 'How do I request system access?')"));
     await evaluate("document.querySelector('#voice-question').click()");
     await until(() => evaluate("document.querySelector('#question-message').textContent.includes('type your question')"));
-    await evaluate("document.querySelector('#question-input').value = 'How many days are refunds accepted?'; document.querySelector('#question-form').requestSubmit()");
-    await until(() => evaluate("document.querySelector('#conversation .message-answer')?.textContent.includes('30 days')"));
-    assert.match(await evaluate("document.querySelector('#conversation .evidence-label').textContent"), /Document section/);
+    await evaluate("document.querySelector('#question-input').value = 'How do I request system access?'; document.querySelector('#question-form').requestSubmit()");
+    await until(() => evaluate("document.querySelector('#conversation .message-answer')?.textContent.includes('Morgan')"));
+    assert.match(await evaluate("document.querySelector('#conversation .message-answer .evidence').textContent"), /new-starter-guide\.pptx.*Slide 4/i);
     await until(() => evaluate("document.querySelector('#conversation .answer-feedback button')?.textContent === 'Play again'"));
     await evaluate("document.querySelector('#conversation .answer-feedback button').click()");
     await until(() => evaluate("document.querySelector('#conversation .answer-feedback button')?.textContent === 'Play again'"));
     assert.equal(speeches, 2);
+    await evaluate("document.querySelector('#question-input').value = 'Does it guarantee account access tomorrow?'; document.querySelector('#question-form').requestSubmit()");
+    await until(() => evaluate("document.querySelectorAll('#conversation .message-answer').length === 2"));
+    assert.match(await evaluate("[...document.querySelectorAll('#conversation .message-answer')].at(-1).textContent"), /could not find/i);
+    assert.equal(await evaluate("[...document.querySelectorAll('#conversation .message-answer')].at(-1).querySelector('.evidence')"), null);
+    await evaluate("document.querySelector('#question-input').value = 'And if the request is pending longer than two working days?'; document.querySelector('#question-form').requestSubmit()");
+    await until(() => evaluate("document.querySelectorAll('#conversation .message-answer').length === 3"));
+    assert.match(await evaluate("[...document.querySelectorAll('#conversation .message-answer')].at(-1).querySelector('.evidence').textContent"), /new-starter-guide\.pptx.*Slide 4/i);
 
     await evaluate("document.querySelector('#publish-assistant').click()");
+    await until(() => evaluate("document.querySelector('#confirm-dialog')?.open"));
+    assert.match(await evaluate("document.querySelector('#confirm-title').textContent"), /publish this assistant/i);
+    await evaluate("document.querySelector('#confirm-dialog button[value=cancel]').click()");
+    assert.equal(await evaluate("document.querySelector('#publish-status').hidden"), true);
+    await evaluate("document.querySelector('#publish-assistant').click()");
+    await until(() => evaluate("document.querySelector('#confirm-dialog')?.open"));
+    await evaluate("document.querySelector('#confirm-proceed').click()");
     await until(() => evaluate("!document.querySelector('#publish-status').hidden"));
     const shareUrl = await evaluate("document.querySelector('#share-url').value");
     await call("Page.navigate", { url: shareUrl });
     await until(() => evaluate("!document.querySelector('#shared-workspace').hidden && document.querySelector('#shared-name').textContent.length > 0"));
-    await evaluate("document.querySelector('#shared-question-input').value = 'How many days are refunds accepted?'; document.querySelector('#shared-question-form').requestSubmit()");
-    await until(() => evaluate("document.querySelector('#shared-conversation .message-answer')?.textContent.includes('30 days')"));
+    assert.equal(await evaluate("document.querySelectorAll('.shared-source-pill').length"), 2);
+    await evaluate("document.querySelector('#shared-question-input').value = 'How do I request system access?'; document.querySelector('#shared-question-form').requestSubmit()");
+    await until(() => evaluate("document.querySelector('#shared-conversation .message-answer')?.textContent.includes('Morgan')"));
+    assert.match(await evaluate("document.querySelector('#shared-conversation .message-answer .evidence').textContent"), /new-starter-guide\.pptx.*Slide 4/i);
     await until(() => evaluate("document.querySelector('#shared-conversation .answer-feedback button')?.textContent === 'Play again'"));
-    assert.equal(speeches, 3);
+    await evaluate("document.querySelector('#shared-question-input').value = 'Does it guarantee account access tomorrow?'; document.querySelector('#shared-question-form').requestSubmit()");
+    await until(() => evaluate("document.querySelectorAll('#shared-conversation .message-answer').length === 2"));
+    assert.match(await evaluate("[...document.querySelectorAll('#shared-conversation .message-answer')].at(-1).textContent"), /could not find/i);
+    assert.equal(speeches, 4);
+    await call("Page.navigate", { url: `http://127.0.0.1:${appPort}/studio` });
+    await until(() => evaluate("!document.querySelector('#owner-workspace').hidden && document.querySelectorAll('#assistant-list button').length === 1"));
+    await evaluate("document.querySelector('#unpublish-assistant').click()");
+    await until(() => evaluate("document.querySelector('#confirm-dialog')?.open"));
+    await evaluate("document.querySelector('#confirm-proceed').click()");
+    await until(() => evaluate("document.querySelector('#publish-status').hidden"));
+    await call("Page.navigate", { url: shareUrl });
+    await until(() => evaluate("document.querySelector('#shared-name').textContent === 'This assistant link is unavailable.'"));
+    assert.equal(await evaluate("document.querySelector('#shared-question-form').hidden"), true);
     assert.deepEqual(errors, []);
   } finally {
     ws?.close();
