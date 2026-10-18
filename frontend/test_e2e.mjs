@@ -147,6 +147,8 @@ test("voice plus a private sample assistant from setup through published revocat
       const detail = await evaluate("JSON.stringify({ url: location.href, ready: document.readyState, stage: document.querySelector('#stage-card')?.className, source: document.querySelector('#source-name-top')?.textContent, error: document.querySelector('#voice-error')?.textContent })");
       throw new Error(`${error.message}: ${detail}; browserErrors=${errors.join('; ')}`);
     }
+    assert.match(await evaluate("document.querySelector('.source-note').textContent"), /shared.*private assistants/i);
+    assert.equal(await evaluate("document.querySelector('#source-upload')"), null);
 
     await evaluate("document.querySelector('[data-ask-now]').click()");
     assert.equal(await evaluate("document.querySelector('#agent-trace-status').textContent"), "Finding source evidence");
@@ -208,7 +210,10 @@ test("voice plus a private sample assistant from setup through published revocat
       document.querySelector('#auth-form').requestSubmit();
     `);
     await until(() => evaluate("!document.querySelector('#studio-view').hidden && document.querySelectorAll('#assistant-list button').length === 0 && !document.querySelector('#setup-view').hidden"));
-    await until(() => evaluate("document.querySelectorAll('#starter-template-list .starter-template-card').length === 3"));
+    await until(() => evaluate("document.querySelectorAll('#starter-template-list .starter-template-card').length === 5"));
+    assert.deepEqual(await evaluate("[...document.querySelectorAll('#starter-template-list .starter-template-card strong')].map((item) => item.textContent)"), [
+      "Team & onboarding guide", "Project delivery room", "Customer kickoff guide", "Course & lesson companion", "Consulting service guide",
+    ]);
     assert.match(await evaluate("document.querySelector('#setup-title').textContent"), /your sources/i);
     assert.match(await evaluate("document.querySelector('.sample-disclosure').textContent"), /Fictional/);
     await call("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });

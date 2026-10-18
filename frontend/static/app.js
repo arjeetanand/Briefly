@@ -41,7 +41,6 @@ const elements = {
   sourceMeta: document.querySelector("#source-meta"),
   sourceIngestStatus: document.querySelector("#source-ingest-status"),
   sourceExcerpt: document.querySelector("#source-excerpt"),
-  sourceUpload: document.querySelector("#source-upload"),
   sampleList: document.querySelector("#sample-list"),
   demoReset: document.querySelector("#demo-reset"),
   demoResetSource: document.querySelector("#demo-reset-source"),
@@ -107,7 +106,7 @@ const phaseCopy = {
   arming: {
     label: "Opening microphone",
     title: "Getting the room ready.",
-    copy: "Allow microphone access in your browser to begin the live practice session.",
+    copy: "Allow microphone access in your browser to begin the live voice session.",
     hint: "This only happens once per session.",
   },
   listening: {
@@ -196,7 +195,6 @@ function setSourceSwitching(switching) {
   elements.questionPrompts.forEach((prompt) => { prompt.disabled = switching; });
   elements.demoReset.disabled = switching;
   elements.demoResetSource.disabled = switching;
-  elements.sourceUpload.disabled = switching;
   elements.sampleList?.querySelectorAll("button").forEach((button) => { button.disabled = switching; });
 }
 
@@ -290,7 +288,7 @@ function setHeard(question) {
 function renderAnswer(answerData) {
   state.lastAnswer = answerData.answer || "";
   state.lastSpokenAnswer = answerData.spoken_answer || state.lastAnswer;
-  elements.answer.textContent = state.lastAnswer || "I could not find that in the pitch document.";
+  elements.answer.textContent = state.lastAnswer || "I could not find that in the approved sources.";
   elements.answer.classList.remove("placeholder");
   const grounded = Boolean(answerData.grounded);
   syncSceneGrounding(grounded);
@@ -347,7 +345,7 @@ async function loadPitch() {
     elements.sourceIngestStatus.title = warnings.join("\n");
     elements.sourceIngestStatus.textContent = warnings.length
       ? `Review before presenting: ${warnings[0]}`
-      : `${format} source ready. Slide/page citations will stay attached to grounded answers.`;
+      : `${format} source ready. Source citations will stay attached to grounded answers.`;
   }
   const sections = Array.isArray(pitch.sections) ? pitch.sections : [];
   elements.sourceExcerpt.textContent = sections.length
@@ -405,7 +403,7 @@ function renderSampleList() {
     download.className = "sample-download";
     download.href = sample.download_url;
     download.download = sample.filename;
-    download.textContent = "Download deck";
+    download.textContent = "Download source";
     actions.append(load, download);
     card.append(heading, tagline, actions);
     sample.questions.forEach((question) => {
@@ -434,10 +432,10 @@ async function loadSample(sampleId) {
     setAnswerPlaceholder();
     elements.heard.textContent = "Your question will appear here.";
     elements.heard.classList.add("placeholder");
-    const sampleName = state.samples.find((sample) => sample.id === sampleId)?.title || "Practice deck";
+    const sampleName = state.samples.find((sample) => sample.id === sampleId)?.title || "Sample source";
     elements.liveAnnouncement.textContent = `${sampleName} is now the approved source.`;
   } catch (error) {
-    showError(`Could not load this practice deck: ${error.message}`);
+    showError(`Could not load this sample source: ${error.message}`);
   } finally {
     setSourceSwitching(false);
   }
@@ -449,36 +447,7 @@ async function loadSamples() {
     state.samples = Array.isArray(response) ? response : [];
     renderSampleList();
   } catch (_) {
-    elements.sampleList.textContent = "Sample decks are unavailable. You can still upload your own work file.";
-  }
-}
-
-async function uploadPitch(file) {
-  if (!file || state.sourceSwitching) return;
-  setSourceSwitching(true);
-  clearError();
-  state.typedAbort?.abort();
-  if (state.active || state.phase === "arming") stopLiveSession();
-  try {
-    const formData = new FormData();
-    formData.append("file", file, file.name);
-    await getJson("/api/pitch/file", { method: "POST", body: formData });
-    state.selectedSample = null;
-    await loadPitch();
-    renderSampleList();
-    setAnswerPlaceholder();
-    elements.heard.textContent = "Your question will appear here.";
-    elements.heard.classList.add("placeholder");
-    elements.liveAnnouncement.textContent = `${file.name} is now the approved source.`;
-  } catch (error) {
-    if (elements.heroConsoleReady?.dataset.state !== "ready") {
-      if (elements.heroSourceStatus) elements.heroSourceStatus.textContent = "Source unavailable";
-      if (elements.heroConsoleReady) elements.heroConsoleReady.dataset.state = "error";
-    }
-    showError(`Could not load this pitch: ${error.message}`);
-  } finally {
-    setSourceSwitching(false);
-    elements.sourceUpload.value = "";
+    elements.sampleList.textContent = "Sample sources are unavailable. You can still add your own material in Assistant Studio.";
   }
 }
 
@@ -1175,7 +1144,6 @@ function bindEvents() {
   });
   elements.demoReset.addEventListener("click", resetDemo);
   elements.demoResetSource.addEventListener("click", resetDemo);
-  elements.sourceUpload.addEventListener("change", (event) => uploadPitch(event.target.files?.[0]));
   elements.sampleList.addEventListener("click", (event) => {
     const question = event.target.closest("[data-sample-question]")?.dataset.sampleQuestion;
     if (question) {

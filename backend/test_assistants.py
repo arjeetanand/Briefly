@@ -102,8 +102,18 @@ def test_starter_library_is_public_read_only(clients):
     guest = TestClient(app.app, base_url="http://localhost")
     samples = guest.get("/api/pitch/samples")
     assert samples.status_code == 200
-    assert len(guest.get("/api/pitch/assistant-templates").json()) == 3
-    assert guest.get(samples.json()[0]["download_url"]).status_code == 200
+    assert len(guest.get("/api/pitch/assistant-templates").json()) == 5
+    for sample in samples.json():
+        download = guest.get(sample["download_url"])
+        assert download.status_code == 200
+        assert download.headers["content-type"].startswith(sample["content_type"])
+    markdown_demo = TestClient(
+        app.app,
+        base_url="http://localhost",
+        headers={"Authorization": "Bearer pilot-invite"},
+    ).post("/api/pitch/sample/course-lessons")
+    assert markdown_demo.status_code == 200
+    assert markdown_demo.json()["metadata"]["format"] == "markdown"
     assert guest.post("/api/pitch/sample/team-handbook").status_code == 401
     assert guest.post("/api/assistants/from-sample/team-onboarding").status_code == 401
 
@@ -111,7 +121,9 @@ def test_starter_library_is_public_read_only(clients):
 def test_sample_assistant_templates_are_private_reviewable_and_atomic(clients, monkeypatch):
     first, second = clients
     templates = first.get("/api/pitch/assistant-templates").json()
-    assert [template["id"] for template in templates] == ["team-onboarding", "project-delivery", "customer-kickoff"]
+    assert [template["id"] for template in templates] == [
+        "team-onboarding", "project-delivery", "customer-kickoff", "course-companion", "consulting-services",
+    ]
     created = first.post("/api/assistants/from-sample/team-onboarding")
     assert created.status_code == 200
     assistant = created.json()
@@ -156,15 +168,27 @@ def test_sample_assistant_suggested_questions_have_named_support(clients):
             ("Who sends the weekly recap?", "customer-success-plan.pptx", "Slide 5", "sends a written weekly recap"),
             ("When will finance approve the sales and returns definitions?", "customer-success-plan.pptx", "Slide 6", "Finance will approve them by day 10"),
         ],
+        "course-companion": [
+            ("What are the three steps in Lesson 3?", "course-lesson-guide.md", "Source section", "Use three steps"),
+            ("How long does the practice activity last?", "course-lesson-guide.md", "Source section", "The practice takes 12 minutes"),
+            ("What does a feature idea propose?", "course-lesson-guide.md", "Source section", "A feature idea proposes a solution"),
+        ],
+        "consulting-services": [
+            ("How many interviews are included in the sprint?", "consulting-service-guide.md", "Source section", "six moderated 45-minute customer interviews"),
+            ("What work is outside the fixed scope?", "consulting-service-guide.md", "Source section", "Participant recruiting, translation, prototype design"),
+            ("What is the illustrative sample fee?", "consulting-service-guide.md", "Source section", "The fictional sample fee is $8,500"),
+        ],
     }
     for template_id, questions in expected.items():
-        assistant = first.post(f"/api/assistants/from-sample/{template_id}").json()
+        created = first.post(f"/api/assistants/from-sample/{template_id}")
+        assert created.status_code == 200, (template_id, created.text)
+        assistant = created.json()
         path = f"/api/assistants/{assistant['id']}"
         for source in assistant["sources"]:
             assert first.patch(f"{path}/sources/{source['id']}", json={"approved": True}).status_code == 200
         for question, filename, citation, evidence in questions:
             answer = first.post(f"{path}/answer", json={"question": question}).json()
-            assert answer["grounded"] is True
+            assert answer["grounded"] is True, (template_id, question, answer)
             assert any(
                 filename in ref["citation"] and citation in ref["citation"] and evidence in ref["text"]
                 for ref in answer["source_refs"]

@@ -92,7 +92,7 @@
         <h2 id="live-title" class="sr-only">Live source question demo</h2>
         <div class="live-section-head">
           <div class="live-title-block"><p class="eyebrow">02 / The live room</p><h2 class="live-heading">Meet your material.</h2><p class="live-intro">Ask the question that comes up in the room. Your source stays beside every answer.</p></div>
-          <div class="live-section-meta"><div class="room-source"><span class="source-dot" aria-hidden="true"></span><div class="room-source-copy"><span>Current source</span><strong id="source-name-top" class="source-name-top">Loading…</strong></div><button id="demo-reset" class="button button-quiet" type="button">Reset demo</button></div><p class="scene-count"><span data-scene-count>03</span> / 05 <i></i> LIVE ROOM</p></div>
+        <div class="live-section-meta"><div class="room-source"><span class="source-dot" aria-hidden="true"></span><div class="room-source-copy"><span>Current source</span><strong id="source-name-top" class="source-name-top">Loading…</strong></div><button id="demo-reset" class="button button-quiet" type="button">Reset demo</button></div><p class="scene-count"><span data-scene-count>03</span> / 05 <i></i> LIVE ASSISTANT</p></div>
         </div>
 
         <div class="live-layout" aria-label="Live practice workspace">
@@ -164,10 +164,10 @@
           </section>
 
           <section class="source-card" aria-labelledby="source-title">
-            <div class="source-card-header"><div><p class="eyebrow">Choose what to practise</p><h2 id="source-title">Your work, ready for questions</h2><p id="source-meta" class="source-meta">Load a sample or your own work file.</p></div><div class="source-actions"><label class="button button-secondary upload-button" for="source-upload">Upload your file</label><input id="source-upload" class="sr-only" type="file" accept=".pptx,.ppt,.pdf,.docx,.txt,.md,.markdown,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/vnd.ms-powerpoint,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,text/markdown" /><button id="demo-reset-source" class="button button-quiet" type="button">Use Pitchroom brief</button></div></div>
-            <div id="sample-list" class="sample-list" aria-label="Everyday work samples"><p class="empty-evidence">Loading practice decks…</p></div>
+            <div class="source-card-header"><div><p class="eyebrow">Explore a sample source</p><h2 id="source-title">Your work, ready for questions</h2><p id="source-meta" class="source-meta">Explore the samples below, then ask by voice or text.</p><p class="source-note">The live demo is shared and uses sample material. Your private assistants are created in Studio.</p></div><div class="source-actions"><a href="/studio" class="button button-secondary">Bring your own sources</a><button id="demo-reset-source" class="button button-quiet" type="button">Restore product brief</button></div></div>
+            <div id="sample-list" class="sample-list" aria-label="Everyday work samples"><p class="empty-evidence">Loading sample sources…</p></div>
             <div id="source-excerpt" class="source-excerpt" tabindex="0" aria-label="Loaded source text"></div>
-            <p id="source-ingest-status" class="source-note source-ingest-status" aria-live="polite">Load a website in Assistant Studio, or upload a PDF, PPTX, DOCX, Markdown, or text file here. Slide and page citations stay attached to each answer.</p>
+            <p id="source-ingest-status" class="source-note source-ingest-status" aria-live="polite">Choose a sample source. Citations stay attached to each answer.</p>
             <p class="source-note">Voice turns use the configured transcription provider. Local Whisper processes recordings on this machine; hosted transcription sends them to its service. Replies use the selected speech provider or your browser voice.</p>
           </section>
         </div>
@@ -188,6 +188,6 @@
     <footer class="footer"><span>Pitchroom AI</span><span>Voice answers from your approved materials.</span><span class="footer-credit">Made by <a href="https://www.linkedin.com/in/arjeetanand/" target="_blank" rel="noopener noreferrer">Arjeet Anand</a></span></footer>
     <button id="motion-toggle" class="motion-toggle" type="button" aria-pressed="false" hidden>Pause motion</button>
     <script src="/static/motion.js?v=spoken-page-v2" defer></script>
-    <script src="/static/app.js?v=kokoro-voice-v3" defer></script>
+    <script src="/static/app.js?v=kokoro-voice-v5" defer></script>
   </body>
 </html>

@@ -24,9 +24,9 @@ Pitchroom AI gives people one place to ask questions about material they already
 - Shows the transcript, answer, and exact source sections used.
 - Presents the demo in the approved ivory-and-plum Spoken Page design, with a floating voice illustration and an Ask / Hear / Know story that moves from source document to voice prompt to cited answer.
 - Uses native scrolling and layered parallax, with a Pause motion control, reduced-motion support, and a stacked story on mobile.
-- Includes one-click practice decks for a project update, customer plan, team handbook, and new-starter guide, plus the original product brief.
+- Includes starter sources for a consulting service guide, course lesson, customer plan, project update, team handbook, and new-starter guide, plus the original product brief.
 
-The legacy `/` live demo keeps its active document in memory for that running API. It still shows the original pitch rehearsal and continuous voice flow; use `/studio` for persistent, private assistants with multiple sources and optional visitor links.
+The `/` live demo uses shared, fictional sample material stored in memory for that running API. Use `/studio` for persistent, owner-scoped assistants with your own sources and optional visitor links.
 
 ## Private assistant studio (pilot)
 
@@ -59,19 +59,21 @@ speech, install `backend/requirements.txt` instead and set `TTS_PROVIDER=browser
 
 Open [http://127.0.0.1:8501](http://127.0.0.1:8501) for the live demo, or visit
 [http://127.0.0.1:8501/studio](http://127.0.0.1:8501/studio) to create a private assistant.
-Select a practice deck or
+Select a sample source or
 upload your own approved PPTX, PDF, DOCX, Markdown, or TXT work file. Ask one of
 the sample questions or type your own. The answer includes the supporting slide,
 page, or section. Start a live session for spoken questions and replies. Legacy
 binary `.ppt` files are converted only when LibreOffice is available; exporting
 to `.pptx` is the reliable path.
 
-Four synthetic PowerPoint files are also available to download and adapt:
+Fictional starter sources are available to download and adapt:
 
 - [Weekly project update](deliverables/demo-samples/weekly-project-update.pptx)
 - [Customer success plan](deliverables/demo-samples/customer-success-plan.pptx)
 - [Team handbook](deliverables/demo-samples/team-handbook.pptx)
 - [New-starter guide](deliverables/demo-samples/new-starter-guide.pptx)
+- [Course lesson guide](deliverables/demo-samples/course-lesson-guide.md)
+- [Consulting service guide](deliverables/demo-samples/consulting-service-guide.md)
 
 ## Configuration
 

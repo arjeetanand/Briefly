@@ -70,7 +70,7 @@ The API runs at `http://localhost:8000` when launched directly. The repository's
 - `GET /api/pitch` returns the loaded pitch, source sections, citations, and extraction metadata.
 - `POST /api/pitch/demo` restores the included Pitchroom demo brief.
 - `GET /api/pitch/samples` lists the four fictional work scenarios available in the live room.
-- `POST /api/pitch/sample/{sample_id}` loads a bundled practice deck using the same PowerPoint text and citation extractor as a user upload.
+- `POST /api/pitch/sample/{sample_id}` loads a bundled sample source using the same document extraction and citation pipeline as a user upload.
 - `POST /api/pitch/document` accepts `{ "document": "..." }`.
 - `POST /api/pitch/file` accepts PPTX, selectable-text PDF, DOCX, plain-text, or Markdown uploads. PPTX text and speaker notes are extracted slide by slide; PDF text is extracted page by page with PyMuPDF; DOCX paragraphs are extracted from OOXML. Legacy `.ppt` files use LibreOffice when it is installed.
 - `POST /api/voice/answer` accepts `{ "question": "..." }` and returns the full grounded `answer`, a concise `spoken_answer` for playback, source chunks, and `source_refs` such as `Slide 4` or `Page 2`. The spoken version uses at most two complete sentences and 280 characters; the full answer and evidence remain visible.

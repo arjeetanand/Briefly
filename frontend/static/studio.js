@@ -168,7 +168,8 @@ function sourceElement(source) {
   kind.className = "source-kind";
   const sampleSource = Boolean(source.metadata?.sample_id);
   const slideCount = source.sections?.length || 0;
-  kind.textContent = `${sampleSource ? `Fictional sample · ${slideCount} slides` : source.kind === "website" ? "Website page" : "Document"} · ${source.approved ? "Approved" : "Needs review"}`;
+  const sampleFormat = source.metadata?.format === "pptx" ? `${slideCount} slides` : `${slideCount} sections`;
+  kind.textContent = `${sampleSource ? `Fictional sample · ${sampleFormat}` : source.kind === "website" ? "Website page" : "Document"} · ${source.approved ? "Approved" : "Needs review"}`;
   title.append(kind);
   const actions = document.createElement("div");
   actions.className = "source-actions";
@@ -229,9 +230,8 @@ async function addStarterSample(sample, button) {
     while (existingSources.some((source) => source.name.toLowerCase() === filename.toLowerCase())) {
       filename = `Sample - ${stem} (${++copy})${extension}`;
     }
-    const file = new File([await response.blob()], filename, {
-      type: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-    });
+    const blob = await response.blob();
+    const file = new File([blob], filename, { type: blob.type });
     const data = new FormData();
     data.append("file", file);
     const result = await api(`/api/assistants/${assistantId}/sources/files`, { method: "POST", body: data });
@@ -317,7 +317,7 @@ async function loadStarterSamples() {
       const create = document.createElement("button");
       create.type = "button";
       create.className = "primary-button";
-      create.textContent = "Try this assistant →";
+      create.textContent = "Create sample assistant →";
       create.setAttribute("aria-label", `Create ${template.name} sample assistant`);
       create.addEventListener("click", () => { void createSampleAssistant(template, create); });
       card.append(audience, title, description, questions, create);
@@ -333,14 +333,14 @@ async function loadStarterSamples() {
       const add = document.createElement("button");
       add.type = "button";
       add.className = "secondary-button";
-      add.textContent = "Add this deck";
+      add.textContent = "Add this sample";
       add.setAttribute("aria-label", `Add ${sample.title} sample to this assistant`);
       add.addEventListener("click", () => { void addStarterSample(sample, add); });
       card.append(title, description, add);
       return card;
     }));
     if (!templates.length) templateList.textContent = "Sample assistants are unavailable. You can still add your own sources.";
-    if (!samples.length) list.textContent = "Sample decks are unavailable. You can still upload your own document.";
+    if (!samples.length) list.textContent = "Sample sources are unavailable. You can still upload your own document.";
     if (state.active && $("#conversation .conversation-empty")) renderEmptyConversation(state.active);
   } catch (_) {
     const unavailable = "Sample assistants are unavailable right now. You can still add your own sources.";

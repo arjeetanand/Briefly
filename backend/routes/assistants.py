@@ -768,7 +768,7 @@ def create_sample_assistant(template_id: str, request: Request) -> dict:
                 raise HTTPException(413, "A bundled sample exceeds the document upload limit.")
             sections, metadata = _extract_document(
                 raw, filename,
-                "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                sample["content_type"],
             )
             if not sections and not metadata.get("warnings"):
                 raise ValueError("No readable text was found in this sample.")

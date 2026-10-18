@@ -40,25 +40,43 @@ DEMO_SAMPLES = {
         "title": "Weekly project update",
         "tagline": "Answer questions about a cross-team product launch.",
         "filename": "weekly-project-update.pptx",
+        "content_type": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
         "questions": ["What is blocking the launch?", "Who owns the export retest, and when?"],
     },
     "customer-plan": {
         "title": "Customer success plan",
         "tagline": "Prepare for a customer kickoff or account review.",
         "filename": "customer-success-plan.pptx",
+        "content_type": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
         "questions": ["What outcome did the customer agree to by day 30?", "Who sends the weekly recap?"],
     },
     "team-handbook": {
         "title": "Team handbook",
         "tagline": "Find the rules for leave, expenses, and team support.",
         "filename": "team-handbook.pptx",
+        "content_type": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
         "questions": ["How do I get an expense approved?", "Where should I take a project blocker?"],
     },
     "new-starter": {
         "title": "New starter guide",
         "tagline": "Answer practical questions during the first month at work.",
         "filename": "new-starter-guide.pptx",
+        "content_type": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
         "questions": ["What should I do in my first week?", "How do I request system access?"],
+    },
+    "course-lessons": {
+        "title": "Better customer interviews · course notes",
+        "tagline": "Help learners revisit a lesson on turning interview notes into useful findings.",
+        "filename": "course-lesson-guide.md",
+        "content_type": "text/markdown",
+        "questions": ["What are the three steps in Lesson 3?", "How long is the practice activity?"],
+    },
+    "service-guide": {
+        "title": "Northstar Research · service guide",
+        "tagline": "Answer prospective-client questions about scope, deliverables, timing, and fees.",
+        "filename": "consulting-service-guide.md",
+        "content_type": "text/markdown",
+        "questions": ["How many interviews are included in the sprint?", "What is outside the project scope?"],
     },
 }
 SAMPLE_ASSISTANT_TEMPLATES = {
@@ -93,6 +111,28 @@ SAMPLE_ASSISTANT_TEMPLATES = {
             "What outcome did the customer agree to by day 30?",
             "Who sends the weekly recap?",
             "When will finance approve the sales and returns definitions?",
+        ],
+    },
+    "course-companion": {
+        "name": "Course & lesson companion",
+        "audience": "Creators & trainers",
+        "tagline": "Give learners a voice-friendly way to revisit a fictional lesson and its examples.",
+        "sample_ids": ["course-lessons"],
+        "questions": [
+            "What are the three steps in Lesson 3?",
+            "How long is the practice activity?",
+            "What does a feature idea propose?",
+        ],
+    },
+    "consulting-services": {
+        "name": "Consulting service guide",
+        "audience": "Businesses & consultants",
+        "tagline": "Explain a fictional service clearly, with scope, deliverables, and terms in view.",
+        "sample_ids": ["service-guide"],
+        "questions": [
+            "How many interviews are included in the sprint?",
+            "What is outside the project scope?",
+            "How long does the sprint take?",
         ],
     },
 }
@@ -1292,13 +1332,13 @@ def list_sample_assistant_templates() -> list[dict[str, Any]]:
 def load_demo_sample(sample_id: str) -> dict[str, Any]:
     sample = DEMO_SAMPLES.get(sample_id)
     if sample is None:
-        raise HTTPException(status_code=404, detail="That practice deck is not available.")
+        raise HTTPException(status_code=404, detail="That sample source is not available.")
     sample_path = SAMPLE_DECK_DIR / sample["filename"]
     try:
         raw = sample_path.read_bytes()
         sections, metadata = _extract_document(
             raw, sample["filename"],
-            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            sample["content_type"],
         )
         text = "\n\n".join(section.text for section in sections)
         store.replace(
@@ -1308,7 +1348,7 @@ def load_demo_sample(sample_id: str) -> dict[str, Any]:
             metadata={**metadata, "demo": True, "use_case": sample["title"]},
         )
     except (OSError, ValueError) as exc:
-        raise HTTPException(status_code=503, detail="The practice deck could not be loaded.") from exc
+        raise HTTPException(status_code=503, detail="The sample source could not be loaded.") from exc
     return {
         "source": store.source,
         "characters": len(store.text),
@@ -1321,14 +1361,14 @@ def load_demo_sample(sample_id: str) -> dict[str, Any]:
 def download_demo_sample(sample_id: str) -> FileResponse:
     sample = DEMO_SAMPLES.get(sample_id)
     if sample is None:
-        raise HTTPException(status_code=404, detail="That practice deck is not available.")
+        raise HTTPException(status_code=404, detail="That sample source is not available.")
     sample_path = SAMPLE_DECK_DIR / sample["filename"]
     if not sample_path.is_file():
-        raise HTTPException(status_code=503, detail="The practice deck is not available for download.")
+        raise HTTPException(status_code=503, detail="The sample source is not available for download.")
     return FileResponse(
         sample_path,
         filename=sample["filename"],
-        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        media_type=sample["content_type"],
     )
 
 

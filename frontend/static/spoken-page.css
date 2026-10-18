@@ -306,8 +306,6 @@ body::before { display: none; }
 
 body > #skip-link.skip-link { position: fixed; z-index: 80; }
 
-.source-actions:has(#source-upload:focus-visible) .upload-button { outline: 3px solid #9367cc; outline-offset: 5px; }
-
 @media (max-width: 760px) {
   .story-section.how-section { padding-inline: 0; grid-template-columns: minmax(0, 1fr); }
   .how-section h2 { font-size: clamp(44px, 12vw, 58px); }
