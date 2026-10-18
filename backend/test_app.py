@@ -503,14 +503,33 @@ def test_kokoro_failure_does_not_fall_through_to_hosted_tts(monkeypatch) -> None
 
 def test_kokoro_warm_route_preloads_only_the_selected_local_voice(monkeypatch) -> None:
     monkeypatch.setenv("TTS_PROVIDER", "kokoro")
+    monkeypatch.setenv("ASR_PROVIDER", "local")
+    monkeypatch.setattr(pitch_routes, "find_spec", lambda name: object())
     warmed: list[bool] = []
     monkeypatch.setattr(pitch_routes, "_warm_kokoro_voice", lambda: warmed.append(True) or True)
 
     response = client.post("/api/voice/warm")
 
     assert response.status_code == 200
-    assert response.json() == {"provider": "kokoro", "warmed": True, "ready": True}
+    assert response.json() == {
+        "provider": "kokoro", "warmed": True, "ready": True,
+        "transcription_provider": "whisper-local", "transcription_ready": True, "transcription_error": None,
+    }
     assert warmed == [True]
+
+
+def test_voice_warm_disables_local_transcription_without_optional_dependency(monkeypatch) -> None:
+    monkeypatch.setenv("TTS_PROVIDER", "browser")
+    monkeypatch.setenv("ASR_PROVIDER", "local")
+    monkeypatch.setattr(pitch_routes, "find_spec", lambda name: None)
+
+    response = client.post("/api/voice/warm")
+
+    assert response.status_code == 200
+    assert response.json()["transcription_ready"] is False
+    assert response.json()["transcription_error"] == (
+        "Local transcription needs backend/requirements-whisper.txt. Install it and restart the app."
+    )
 
 
 def test_kokoro_warm_failure_keeps_the_selected_provider_visible(monkeypatch) -> None:
@@ -743,6 +762,7 @@ def test_huggingface_timeout_is_a_service_error(monkeypatch) -> None:
 
 def test_local_transcription_needs_no_token_and_releases_slot(monkeypatch) -> None:
     monkeypatch.setenv("ASR_PROVIDER", "local")
+    monkeypatch.setattr(pitch_routes, "find_spec", lambda name: object())
     monkeypatch.delenv("HUGGINGFACE_API_TOKEN", raising=False)
     pitch_routes._transcription_starts.clear()
     monkeypatch.setattr(

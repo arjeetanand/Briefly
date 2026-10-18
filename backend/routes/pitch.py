@@ -5,6 +5,8 @@ import json
 import io
 import base64
 import binascii
+import secrets
+from importlib.util import find_spec
 import os
 import re
 import shutil
@@ -154,6 +156,7 @@ DEFAULT_MAX_DOCUMENT_BYTES = 25 * 1024 * 1024
 MAX_OOXML_MEMBER_BYTES = 8 * 1024 * 1024
 MAX_OOXML_DOCUMENT_BYTES = 32 * 1024 * 1024
 MAX_TRANSCRIPTIONS_PER_MINUTE = 12
+MAX_SAMPLE_SPEECH_PER_MINUTE = 12
 KOKORO_SAMPLE_RATE = 24_000
 KOKORO_MODEL_REPO = "hexgrad/Kokoro-82M"
 MAX_KOKORO_TEXT_CHARS = 1_200
@@ -192,6 +195,9 @@ _kokoro_warmed: set[tuple[str, str, str, float, str]] = set()
 # ponytail: one room-wide process slot and rate window; per-room buckets if multi-room support lands.
 _transcription_lock = Lock()
 _transcription_starts: deque[float] = deque()
+_sample_speech_lock = Lock()
+_sample_speech_answers: dict[str, tuple[str, str, float]] = {}
+_sample_speech_starts: deque[float] = deque()
 router = APIRouter()
 
 
@@ -305,7 +311,7 @@ def _sentence_parts(value: str) -> list[str]:
     return parts or [normalized]
 
 
-def _text_sections(value: str, citation_prefix: str = "Source section") -> list[SourceSection]:
+def _text_sections(value: str, citation_prefix: str = "Source section", *, markdown: bool = False) -> list[SourceSection]:
     sections: list[SourceSection] = []
     # Blank-line boundaries preserve headings and short list blocks. A single
     # line document still falls through to sentence-level sections.
@@ -313,7 +319,15 @@ def _text_sections(value: str, citation_prefix: str = "Source section") -> list[
     if not blocks:
         blocks = [value or ""]
     for block in blocks:
-        for part in _sentence_parts(block):
+        markdown_heading = re.match(r"^(#{1,6}\s+[^\r\n]+)\r?\n(.+)$", block, re.DOTALL) if markdown else None
+        if markdown_heading:
+            heading = markdown_heading.group(1).strip().rstrip(".!?")
+            parts = _sentence_parts(f"{heading}. {markdown_heading.group(2).strip()}")
+            if len(parts) > 1:
+                parts = [f"{parts[0]} {parts[1]}", *parts[2:]]
+        else:
+            parts = _sentence_parts(block)
+        for part in parts:
             sections.append(SourceSection(part, f"{citation_prefix} {len(sections) + 1}"))
     return sections
 
@@ -546,7 +560,7 @@ def _extract_document(payload: bytes, filename: str, content_type: str) -> tuple
         text = payload.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise ValueError("This text file is not valid UTF-8.") from exc
-    sections = _text_sections(text)
+    sections = _text_sections(text, markdown=extension in {".md", ".markdown"})
     return sections, {
         "format": "markdown" if extension in {".md", ".markdown"} else "text",
         "sections": len(sections),
@@ -812,11 +826,42 @@ def _bounded_spoken_answer(answer: str) -> str:
     return "The matching source passage is too long to read aloud in one reply. Please ask a more focused question."
 
 
-def _concise_spoken_reply(answer: str) -> str:
-    """Read only a short, complete excerpt; the full answer and evidence stay visible."""
+def _concise_spoken_reply(answer: str, question: str) -> str:
+    """Speak the source sentences most relevant to the question."""
     normalized = re.sub(r"\s+", " ", answer).strip()
     normalized = re.sub(r"^According to the approved source:\s*", "", normalized, flags=re.IGNORECASE)
-    sentences = [sentence.strip() for sentence in re.split(r"(?<=[.!?])\s+", normalized) if sentence.strip()]
+    sentences = [
+        re.sub(r"^#{1,6}\s*", "", sentence.strip())
+        for sentence in re.split(r"(?<=[.!?])\s+|(?=\b0[1-9]\s+(?!/\d)[A-Z])", normalized)
+        if sentence.strip()
+    ]
+    question_words = _token_set(question)
+    question_words.update(word.lower() for word in WORD_PATTERN.findall(question) if word.isdigit())
+    question_stems = {_token_stem(word) for word in question_words}
+    asks_duration = bool(re.search(r"\bhow\s+long\b", question, re.IGNORECASE))
+    asks_quantity = bool(re.search(r"\bhow\s+(?:many|much)\b", question, re.IGNORECASE))
+    quantity_pattern = re.compile(
+        r"\b(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s*[- ]?\s*(?:days?|weeks?|months?|years?|minutes?|hours?)\b",
+        re.IGNORECASE,
+    )
+    scored_sentences: list[tuple[int, int, str]] = []
+    for index, sentence in enumerate(sentences):
+        if sentence.endswith("?"):
+            continue
+        cleaned = re.sub(r"^\d{2}\s+", "", sentence).strip()
+        sentence_words = _token_set(cleaned)
+        sentence_words.update(word.lower() for word in WORD_PATTERN.findall(cleaned) if word.isdigit())
+        score = len(question_stems.intersection({_token_stem(word) for word in sentence_words}))
+        if quantity_pattern.search(cleaned):
+            if asks_duration:
+                score += 2
+            elif asks_quantity:
+                score += 1
+        if score and len(cleaned) <= MAX_SPOKEN_REPLY_CHARS:
+            scored_sentences.append((score, index, cleaned))
+    if scored_sentences:
+        selected_sentences = sorted(scored_sentences, key=lambda item: (-item[0], item[1]))[:MAX_SPOKEN_REPLY_SENTENCES]
+        sentences = [sentence for _, _, sentence in sorted(selected_sentences, key=lambda item: item[1])]
     selected: list[str] = []
     selected_length = 0
     for sentence in sentences:
@@ -1325,7 +1370,88 @@ def list_demo_samples() -> list[dict[str, Any]]:
 
 @router.get("/api/pitch/assistant-templates")
 def list_sample_assistant_templates() -> list[dict[str, Any]]:
-    return [{"id": template_id, **template} for template_id, template in SAMPLE_ASSISTANT_TEMPLATES.items()]
+    return [
+        {
+            "id": template_id,
+            **template,
+            "sources": [
+                {"id": sample_id, "filename": DEMO_SAMPLES[sample_id]["filename"]}
+                for sample_id in template["sample_ids"]
+            ],
+        }
+        for template_id, template in SAMPLE_ASSISTANT_TEMPLATES.items()
+    ]
+
+
+@lru_cache(maxsize=5)
+def _sample_assistant_snapshot(assistant_id: str) -> tuple[DocumentStore, dict[str, Any]]:
+    template = SAMPLE_ASSISTANT_TEMPLATES.get(assistant_id)
+    if template is None:
+        raise HTTPException(status_code=404, detail="That sample assistant is not available.")
+    sources: list[dict[str, Any]] = []
+    sections: list[SourceSection] = []
+    warnings: list[str] = []
+    for sample_id in template["sample_ids"]:
+        sample = DEMO_SAMPLES[sample_id]
+        path = SAMPLE_DECK_DIR / sample["filename"]
+        try:
+            parsed, metadata = _extract_document(path.read_bytes(), sample["filename"], sample["content_type"])
+        except (OSError, ValueError) as exc:
+            raise HTTPException(status_code=503, detail="A sample source could not be loaded.") from exc
+        sections.extend(
+            SourceSection(section.text, f"{sample['filename']} · {section.citation}", section.kind, section.url)
+            for section in parsed
+        )
+        warnings.extend(metadata.get("warnings", []))
+        sources.append({
+            "id": sample_id,
+            "title": sample["title"],
+            "filename": sample["filename"],
+            "content_type": sample["content_type"],
+            "download_url": f"/api/pitch/sample/{sample_id}/file",
+            "format": metadata.get("format", "text"),
+        })
+    snapshot = DocumentStore(SAMPLE_DECK_DIR / f".{assistant_id}-snapshot")
+    snapshot.replace(
+        "\n\n".join(section.text for section in sections),
+        " + ".join(source["filename"] for source in sources),
+        sections=sections,
+        metadata={"format": "multiple" if len(sources) > 1 else sources[0]["format"], "sections": len(sections), "warnings": warnings, "demo": True},
+    )
+    return snapshot, {
+        "id": assistant_id,
+        **template,
+        "source": snapshot.source,
+        "metadata": snapshot.metadata,
+        "sources": sources,
+        "sections": snapshot.source_payload(),
+    }
+
+
+@router.get("/api/pitch/sample-assistants/{assistant_id}")
+def get_sample_assistant(assistant_id: str) -> dict[str, Any]:
+    return _sample_assistant_snapshot(assistant_id)[1]
+
+
+def _remember_sample_speech(assistant_id: str, text: str) -> str:
+    now = monotonic()
+    with _sample_speech_lock:
+        for answer_id, (_, _, created) in list(_sample_speech_answers.items()):
+            if now - created > 900:
+                del _sample_speech_answers[answer_id]
+        while len(_sample_speech_answers) >= 256:
+            _sample_speech_answers.pop(next(iter(_sample_speech_answers)))
+        answer_id = secrets.token_urlsafe(24)
+        _sample_speech_answers[answer_id] = (assistant_id, text, now)
+    return answer_id
+
+
+@router.post("/api/pitch/sample-assistants/{assistant_id}/answer")
+def answer_sample_assistant(assistant_id: str, request: QuestionRequest) -> dict[str, Any]:
+    snapshot, _ = _sample_assistant_snapshot(assistant_id)
+    answer = _answer_question_from_store(request, snapshot, allow_generation=False)
+    answer["speech_id"] = _remember_sample_speech(assistant_id, answer["spoken_answer"])
+    return answer
 
 
 @router.post("/api/pitch/sample/{sample_id}")
@@ -1453,7 +1579,7 @@ def _answer_question_from_store(
     return {
         "question": request.question,
         "answer": answer,
-        "spoken_answer": _concise_spoken_reply(answer),
+        "spoken_answer": _concise_spoken_reply(" ".join(context) if provider == "extractive" else answer, request.question),
         "grounded": bool(context),
         "provider": provider,
         "sources": context,
@@ -1464,8 +1590,27 @@ def _answer_question_from_store(
     }
 
 
-@router.post("/api/voice/transcribe")
-async def transcribe_audio(file: UploadFile = File(...)) -> dict[str, str]:
+def _transcription_provider() -> str:
+    provider = _setting("ASR_PROVIDER").lower()
+    return "whisper-local" if provider == "local" else "huggingface" if provider == "huggingface" else "unavailable"
+
+
+def _transcription_error() -> str | None:
+    provider = _setting("ASR_PROVIDER").lower()
+    if provider not in {"local", "huggingface"}:
+        return "ASR_PROVIDER must be local or huggingface."
+    if provider == "local":
+        try:
+            if find_spec("faster_whisper") is None:
+                return "Local transcription needs backend/requirements-whisper.txt. Install it and restart the app."
+        except (ImportError, ValueError):
+            return "Local transcription needs backend/requirements-whisper.txt. Install it and restart the app."
+    if provider == "huggingface" and not _setting("HUGGINGFACE_API_TOKEN", ""):
+        return "Set HUGGINGFACE_API_TOKEN in .env to transcribe audio."
+    return None
+
+
+async def _transcribe_audio_file(file: UploadFile) -> dict[str, str]:
     if not _is_supported_audio_upload(file):
         raise HTTPException(
             status_code=415,
@@ -1473,10 +1618,8 @@ async def transcribe_audio(file: UploadFile = File(...)) -> dict[str, str]:
         )
     audio = await _read_limited_audio_upload(file, _audio_upload_limit())
     provider = _setting("ASR_PROVIDER").lower()
-    if provider not in {"local", "huggingface"}:
-        raise HTTPException(status_code=503, detail="ASR_PROVIDER must be local or huggingface.")
-    if provider == "huggingface" and not _setting("HUGGINGFACE_API_TOKEN", ""):
-        raise HTTPException(status_code=503, detail="Set HUGGINGFACE_API_TOKEN in .env to transcribe audio.")
+    if error := _transcription_error():
+        raise HTTPException(status_code=503, detail=error)
     if not _transcription_lock.acquire(blocking=False):
         raise HTTPException(status_code=429, detail="A transcription is already processing. Try again shortly.")
     if not _take_transcription_budget():
@@ -1492,6 +1635,11 @@ async def transcribe_audio(file: UploadFile = File(...)) -> dict[str, str]:
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     return {"text": text, "provider": "whisper-local" if provider == "local" else "huggingface"}
+
+
+@router.post("/api/voice/transcribe")
+async def transcribe_audio(file: UploadFile = File(...)) -> dict[str, str]:
+    return await _transcribe_audio_file(file)
 
 
 @router.post("/api/voice/speak")
@@ -1512,13 +1660,58 @@ def warm_voice() -> dict[str, Any]:
     providers are deliberately never invoked by this endpoint.
     """
     preference = _tts_provider_preference()
+    transcription_error = _transcription_error()
+    transcription = {
+        "transcription_provider": _transcription_provider(),
+        "transcription_ready": transcription_error is None,
+        "transcription_error": transcription_error,
+    }
     if preference != "kokoro":
-        return {"provider": _speech_provider(), "warmed": False, "ready": preference == "browser"}
+        return {"provider": _speech_provider(), "warmed": False, "ready": preference == "browser", **transcription}
     try:
         warmed = _warm_kokoro_voice()
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc), headers={"X-Speech-Provider": "kokoro"}) from exc
-    return {"provider": "kokoro", "warmed": warmed, "ready": True}
+    return {"provider": "kokoro", "warmed": warmed, "ready": True, **transcription}
+
+
+@router.post("/api/pitch/sample-assistants/{assistant_id}/voice/warm")
+def warm_sample_assistant_voice(assistant_id: str) -> dict[str, Any]:
+    if assistant_id not in SAMPLE_ASSISTANT_TEMPLATES:
+        raise HTTPException(status_code=404, detail="That sample assistant is not available.")
+    return warm_voice()
+
+
+@router.post("/api/pitch/sample-assistants/{assistant_id}/voice/transcribe")
+async def transcribe_sample_assistant_voice(assistant_id: str, file: UploadFile = File(...)) -> dict[str, str]:
+    if assistant_id not in SAMPLE_ASSISTANT_TEMPLATES:
+        raise HTTPException(status_code=404, detail="That sample assistant is not available.")
+    return await _transcribe_audio_file(file)
+
+
+@router.post("/api/pitch/sample-assistants/{assistant_id}/answers/{answer_id}/speech")
+def speak_sample_assistant_answer(assistant_id: str, answer_id: str) -> Response:
+    if assistant_id not in SAMPLE_ASSISTANT_TEMPLATES or not 24 <= len(answer_id) <= 64:
+        raise HTTPException(status_code=404, detail="That sample assistant is not available.")
+    with _sample_speech_lock:
+        item = _sample_speech_answers.get(answer_id)
+        if item and monotonic() - item[2] > 900:
+            del _sample_speech_answers[answer_id]
+            item = None
+    if not item or item[0] != assistant_id:
+        raise HTTPException(status_code=404, detail="That sample answer is no longer available for speech.")
+    with _sample_speech_lock:
+        now = monotonic()
+        while _sample_speech_starts and now - _sample_speech_starts[0] >= 60:
+            _sample_speech_starts.popleft()
+        if len(_sample_speech_starts) >= MAX_SAMPLE_SPEECH_PER_MINUTE:
+            raise HTTPException(status_code=429, detail="The sample voice has reached its short-term limit. Try again in a moment.")
+        _sample_speech_starts.append(now)
+    try:
+        audio, media_type = _speech_audio(item[1])
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return Response(content=audio, media_type=media_type)
 
 
 @router.post("/api/pitch/read")

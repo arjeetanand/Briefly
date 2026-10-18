@@ -92,15 +92,18 @@ const state = {
   sourceSwitching: false,
   speechWarmPromise: null,
   speechProvider: null,
+  lastSpeechId: "",
+  transcriptionReady: null,
+  transcriptionError: "",
   samples: [],
-  selectedSample: null,
+  selectedSample: "project-delivery",
 };
 
 const phaseCopy = {
   ready: {
     label: "Ready when you are",
     title: "One tap starts the room.",
-    copy: "Pitchroom automatically closes each turn after a brief pause, answers from the source, and re-arms the microphone.",
+    copy: "Ask this sample assistant a question. Pitchroom checks its sources, speaks a concise answer, then listens for your next turn.",
     hint: "Your browser will ask once for microphone permission.",
   },
   arming: {
@@ -191,7 +194,7 @@ function clearError() {
 function setSourceSwitching(switching) {
   state.sourceSwitching = switching;
   elements.askButton.disabled = switching || Boolean(state.typedAbort);
-  elements.liveToggles.forEach((toggle) => { toggle.disabled = switching; });
+  elements.liveToggles.forEach((toggle) => { toggle.disabled = switching || state.transcriptionReady === false; });
   elements.questionPrompts.forEach((prompt) => { prompt.disabled = switching; });
   elements.demoReset.disabled = switching;
   elements.demoResetSource.disabled = switching;
@@ -260,6 +263,7 @@ async function apiFetch(path, options = {}) {
 function setAnswerPlaceholder() {
   state.lastAnswer = "";
   state.lastSpokenAnswer = "";
+  state.lastSpeechId = "";
   elements.answer.textContent = "Pitchroom will answer only when it finds matching approved-source evidence.";
   elements.answer.classList.add("placeholder");
   elements.groundingBadge.textContent = "Waiting for a question";
@@ -288,6 +292,7 @@ function setHeard(question) {
 function renderAnswer(answerData) {
   state.lastAnswer = answerData.answer || "";
   state.lastSpokenAnswer = answerData.spoken_answer || state.lastAnswer;
+  state.lastSpeechId = answerData.speech_id || "";
   elements.answer.textContent = state.lastAnswer || "I could not find that in the approved sources.";
   elements.answer.classList.remove("placeholder");
   const grounded = Boolean(answerData.grounded);
@@ -329,15 +334,16 @@ function sourceDisplayName(source) {
 }
 
 async function loadPitch() {
-  const pitch = await getJson("/api/pitch");
+  const pitch = await getJson(`/api/pitch/sample-assistants/${encodeURIComponent(state.selectedSample)}`);
   const source = sourceDisplayName(pitch.source);
   elements.sourceNameTop.textContent = source;
   elements.sourceNameTop.title = source;
-  const chunks = Array.isArray(pitch.chunks) ? pitch.chunks.length : 0;
-  const characters = (pitch.text || "").length;
+  const sections = Array.isArray(pitch.sections) ? pitch.sections : [];
+  const chunks = sections.length;
+  const characters = sections.reduce((total, section) => total + String(section.text || "").length, 0);
   const metadata = pitch.metadata && typeof pitch.metadata === "object" ? pitch.metadata : {};
   const format = String(metadata.format || "text").toUpperCase();
-  const units = metadata.slides ? `${metadata.slides} slides` : metadata.pages ? `${metadata.pages} pages` : `${chunks} source sections`;
+  const units = `${(pitch.sources || []).length} source${(pitch.sources || []).length === 1 ? "" : "s"} · ${chunks} sections`;
   elements.sourceMeta.textContent = `${source} · ${format} · ${units} · ${characters.toLocaleString()} characters`;
   const warnings = Array.isArray(metadata.warnings) ? metadata.warnings.filter(Boolean) : [];
   if (elements.sourceIngestStatus) {
@@ -345,9 +351,8 @@ async function loadPitch() {
     elements.sourceIngestStatus.title = warnings.join("\n");
     elements.sourceIngestStatus.textContent = warnings.length
       ? `Review before presenting: ${warnings[0]}`
-      : `${format} source ready. Source citations will stay attached to grounded answers.`;
+      : `Sample sources ready. Citations stay attached to grounded answers.`;
   }
-  const sections = Array.isArray(pitch.sections) ? pitch.sections : [];
   elements.sourceExcerpt.textContent = sections.length
     ? sections.map((section) => `${section.citation || "Source section"}\n${section.text || ""}`).join("\n\n")
     : (pitch.text || "No approved source is loaded.");
@@ -357,29 +362,7 @@ async function loadPitch() {
 }
 
 async function resetDemo() {
-  if (state.sourceSwitching) return;
-  setSourceSwitching(true);
-  clearError();
-  state.typedAbort?.abort();
-  if (state.active || state.phase === "arming") stopLiveSession();
-  try {
-    await getJson("/api/pitch/demo", { method: "POST" });
-    state.selectedSample = null;
-    await loadPitch();
-    renderSampleList();
-    setAnswerPlaceholder();
-    elements.heard.textContent = "Your question will appear here.";
-    elements.heard.classList.add("placeholder");
-    elements.liveAnnouncement.textContent = "The included demo source has been restored.";
-  } catch (error) {
-    if (elements.heroConsoleReady?.dataset.state !== "ready") {
-      if (elements.heroSourceStatus) elements.heroSourceStatus.textContent = "Source unavailable";
-      if (elements.heroConsoleReady) elements.heroConsoleReady.dataset.state = "error";
-    }
-    showError(`Could not restore the demo source: ${error.message}`);
-  } finally {
-    setSourceSwitching(false);
-  }
+  return loadSample("project-delivery");
 }
 
 function renderSampleList() {
@@ -389,28 +372,31 @@ function renderSampleList() {
     const card = document.createElement("article");
     card.className = `sample-card${state.selectedSample === sample.id ? " is-selected" : ""}`;
     const heading = document.createElement("h3");
-    heading.textContent = sample.title;
+    heading.textContent = sample.name;
     const tagline = document.createElement("p");
     tagline.textContent = sample.tagline;
+    const audience = document.createElement("span");
+    audience.className = "sample-audience";
+    audience.textContent = sample.audience;
+    const sources = document.createElement("p");
+    sources.className = "sample-sources";
+    sources.textContent = (sample.sources || []).map((source) => source.filename).join(" · ");
     const actions = document.createElement("div");
     actions.className = "sample-actions";
     const load = document.createElement("button");
     load.className = "sample-load button button-secondary";
     load.type = "button";
     load.dataset.sampleLoad = sample.id;
-    load.textContent = state.selectedSample === sample.id ? "Loaded" : "Use sample";
-    const download = document.createElement("a");
-    download.className = "sample-download";
-    download.href = sample.download_url;
-    download.download = sample.filename;
-    download.textContent = "Download source";
-    actions.append(load, download);
-    card.append(heading, tagline, actions);
+    load.textContent = state.selectedSample === sample.id ? "Selected" : "Try this assistant";
+    load.setAttribute("aria-pressed", String(state.selectedSample === sample.id));
+    actions.append(load);
+    card.append(audience, heading, tagline, sources, actions);
     sample.questions.forEach((question) => {
       const ask = document.createElement("button");
       ask.className = "sample-question";
       ask.type = "button";
       ask.dataset.sampleQuestion = question;
+      ask.dataset.sampleAssistant = sample.id;
       ask.textContent = question;
       card.append(ask);
     });
@@ -420,21 +406,23 @@ function renderSampleList() {
 
 async function loadSample(sampleId) {
   if (state.sourceSwitching) return;
+  const previousSample = state.selectedSample;
   setSourceSwitching(true);
   clearError();
   state.typedAbort?.abort();
   if (state.active || state.phase === "arming") stopLiveSession();
   try {
-    await getJson(`/api/pitch/sample/${encodeURIComponent(sampleId)}`, { method: "POST" });
     state.selectedSample = sampleId;
     await loadPitch();
     renderSampleList();
     setAnswerPlaceholder();
     elements.heard.textContent = "Your question will appear here.";
     elements.heard.classList.add("placeholder");
-    const sampleName = state.samples.find((sample) => sample.id === sampleId)?.title || "Sample source";
-    elements.liveAnnouncement.textContent = `${sampleName} is now the approved source.`;
+    const sampleName = state.samples.find((sample) => sample.id === sampleId)?.name || "Sample assistant";
+    elements.liveAnnouncement.textContent = `${sampleName} is ready. Ask by voice or text.`;
   } catch (error) {
+    state.selectedSample = previousSample;
+    renderSampleList();
     showError(`Could not load this sample source: ${error.message}`);
   } finally {
     setSourceSwitching(false);
@@ -443,7 +431,7 @@ async function loadSample(sampleId) {
 
 async function loadSamples() {
   try {
-    const response = await getJson("/api/pitch/samples");
+    const response = await getJson("/api/pitch/assistant-templates");
     state.samples = Array.isArray(response) ? response : [];
     renderSampleList();
   } catch (_) {
@@ -739,6 +727,10 @@ async function startLiveSession() {
     stopLiveSession();
     return;
   }
+  if (state.transcriptionReady === false) {
+    showError(`${state.transcriptionError} Type your question below instead.`);
+    return;
+  }
   if (state.phase === "arming") return;
   clearError();
   if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder || !(window.AudioContext || window.webkitAudioContext)) {
@@ -812,7 +804,7 @@ function stopLiveSession() {
 }
 
 async function requestAnswer(question, signal) {
-  return getJson("/api/voice/answer", {
+  return getJson(`/api/pitch/sample-assistants/${encodeURIComponent(state.selectedSample)}/answer`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ question }),
@@ -821,10 +813,12 @@ async function requestAnswer(question, signal) {
 }
 
 async function requestSpeech(text, signal) {
-  const response = await apiFetch("/api/voice/speak", {
+  const speechUrl = state.lastSpeechId
+    ? `/api/pitch/sample-assistants/${encodeURIComponent(state.selectedSample)}/answers/${encodeURIComponent(state.lastSpeechId)}/speech`
+    : "/api/voice/speak";
+  const response = await apiFetch(speechUrl, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text }),
+    ...(!state.lastSpeechId ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) } : {}),
     signal,
   });
   if (!response.ok) {
@@ -838,8 +832,11 @@ async function requestSpeech(text, signal) {
 }
 
 function setVoiceReadiness(message, status = "checking") {
-  elements.voiceReadiness.textContent = message;
+  const transcriptionWarning = state.transcriptionReady === false
+    ? ` · Live microphone unavailable: ${state.transcriptionError} Type your question instead.` : "";
+  elements.voiceReadiness.textContent = `${message}${transcriptionWarning}`;
   elements.voiceReadiness.dataset.state = status;
+  elements.liveToggles.forEach((toggle) => { toggle.disabled = state.sourceSwitching || state.transcriptionReady === false; });
 }
 
 function warmSpeechProvider() {
@@ -848,11 +845,13 @@ function warmSpeechProvider() {
   // live room never spends provider credits or sends an answer to a provider.
   if (state.speechWarmPromise) return state.speechWarmPromise;
   setVoiceReadiness("Checking the selected voice…");
-  state.speechWarmPromise = apiFetch("/api/voice/warm", { method: "POST" })
+  state.speechWarmPromise = apiFetch(`/api/pitch/sample-assistants/${encodeURIComponent(state.selectedSample)}/voice/warm`, { method: "POST" })
     .then(async (response) => {
       let readiness = {};
       try { readiness = await response.json(); } catch (_) { /* retain fallback below */ }
       state.speechProvider = readiness.provider || response.headers.get("X-Speech-Provider") || null;
+      state.transcriptionReady = readiness.transcription_ready ?? null;
+      state.transcriptionError = readiness.transcription_error || "Voice input is unavailable.";
       if (!response.ok) {
         setVoiceReadiness(state.speechProvider === "kokoro"
           ? "Kokoro voice unavailable"
@@ -1009,7 +1008,7 @@ async function processVoiceTurn(blob, sessionId, turnEpoch) {
     const audio = new File([blob], `pitchroom-question.${extension}`, { type: fileType });
     const formData = new FormData();
     formData.append("file", audio, audio.name);
-    const transcription = await getJson("/api/voice/transcribe", { method: "POST", body: formData, signal: controller.signal });
+    const transcription = await getJson(`/api/pitch/sample-assistants/${encodeURIComponent(state.selectedSample)}/voice/transcribe`, { method: "POST", body: formData, signal: controller.signal });
     if (!state.active || sessionId !== state.sessionId || turnEpoch !== state.turnEpoch) return;
     const question = String(transcription.text || "").trim();
     if (!question) throw new Error("No speech was detected. Try asking your question again.");
@@ -1144,9 +1143,13 @@ function bindEvents() {
   });
   elements.demoReset.addEventListener("click", resetDemo);
   elements.demoResetSource.addEventListener("click", resetDemo);
-  elements.sampleList.addEventListener("click", (event) => {
-    const question = event.target.closest("[data-sample-question]")?.dataset.sampleQuestion;
+  elements.sampleList.addEventListener("click", async (event) => {
+    const prompt = event.target.closest("[data-sample-question]");
+    const question = prompt?.dataset.sampleQuestion;
     if (question) {
+      const sampleId = prompt.dataset.sampleAssistant;
+      if (sampleId && state.selectedSample !== sampleId) await loadSample(sampleId);
+      if (sampleId && state.selectedSample !== sampleId) return;
       elements.textQuestion.value = question;
       elements.textQuestionForm.requestSubmit();
       return;
@@ -1157,10 +1160,14 @@ function bindEvents() {
   elements.textQuestionForm.addEventListener("submit", askTypedQuestion);
   elements.playAnswer.addEventListener("click", manuallyPlayAnswer);
   elements.questionPrompts.forEach((prompt) => {
-    prompt.addEventListener("click", () => {
+    prompt.addEventListener("click", async () => {
       const question = String(prompt.dataset.question || "").trim();
       if (!question) return;
       elements.textQuestion.value = question;
+      if (prompt.dataset.demoSample && state.selectedSample !== prompt.dataset.demoSample) {
+        await loadSample(prompt.dataset.demoSample);
+        if (state.selectedSample !== prompt.dataset.demoSample) return;
+      }
       const askNow = prompt.hasAttribute("data-ask-now");
       const target = askNow && window.matchMedia("(max-width: 880px)").matches
         ? document.querySelector(".conversation-card") : document.querySelector("#live-stage");

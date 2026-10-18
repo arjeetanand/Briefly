@@ -57,7 +57,7 @@ test("voice plus a private sample assistant from setup through published revocat
   const profile = await mkdtemp(join(tmpdir(), "pitchroom-e2e-"));
   const server = spawn(join(root, ".venv/bin/python"), ["-m", "uvicorn", "app:app", "--host", "127.0.0.1", "--port", String(appPort)], {
     cwd: join(root, "backend"),
-    env: { ...process.env, TTS_PROVIDER: "browser", ANSWER_GENERATION_PROVIDER: "extractive", PITCHROOM_ACCESS_TOKEN: "", PITCHROOM_DATABASE_PATH: join(profile, "studio.sqlite3") },
+    env: { ...process.env, TTS_PROVIDER: "browser", ASR_PROVIDER: "huggingface", HUGGINGFACE_API_TOKEN: "e2e-stub-token", ANSWER_GENERATION_PROVIDER: "extractive", PITCHROOM_ACCESS_TOKEN: "", PITCHROOM_DATABASE_PATH: join(profile, "studio.sqlite3") },
     stdio: "ignore",
   });
   const browser = spawn(chrome, ["--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check", "--autoplay-policy=no-user-gesture-required", `--user-data-dir=${profile}`, `--remote-debugging-port=${debugPort}`, "about:blank"], { stdio: "ignore" });
@@ -73,6 +73,7 @@ test("voice plus a private sample assistant from setup through published revocat
     const errors = [];
     let transcriptions = 0;
     let speeches = 0;
+    let failNextTranscription = false;
     const call = (method, params = {}) => new Promise((resolve, reject) => {
       const requestId = ++id;
       pending.set(requestId, { resolve, reject });
@@ -94,15 +95,20 @@ test("voice plus a private sample assistant from setup through published revocat
         errors.push(message.params.exceptionDetails.text);
       } else if (message.method === "Fetch.requestPaused") {
         const { requestId, request } = message.params;
-        const isTranscript = request.url.includes("/api/voice/transcribe");
+        const isTranscript = request.url.includes("/voice/transcribe");
+        const isStudio = request.url.includes("/api/assistants/") || request.url.includes("/api/shared/");
         if (isTranscript) transcriptions += 1;
         else speeches += 1;
+        const failedTranscription = isTranscript && failNextTranscription;
+        if (failedTranscription) failNextTranscription = false;
         void call("Fetch.fulfillRequest", {
           requestId,
-          responseCode: 200,
+          responseCode: failedTranscription ? 503 : 200,
           responseHeaders: [{ name: "Content-Type", value: isTranscript ? "application/json" : "audio/wav" }],
-          body: isTranscript
-            ? Buffer.from(JSON.stringify({ text: "What problem does Pitchroom AI solve?" })).toString("base64")
+          body: failedTranscription
+            ? Buffer.from(JSON.stringify({ detail: "The transcription provider is unavailable." })).toString("base64")
+            : isTranscript
+              ? Buffer.from(JSON.stringify({ text: isStudio ? "How do I request system access?" : "What is blocking the launch?" })).toString("base64")
             : silentWav(),
         }).catch((error) => errors.push(error.message));
       }
@@ -110,15 +116,24 @@ test("voice plus a private sample assistant from setup through published revocat
     await call("Page.enable");
     await call("Runtime.enable");
     await call("Fetch.enable", { patterns: [
+      { urlPattern: "*/api/pitch/sample-assistants/*/voice/transcribe", requestStage: "Request" },
+      { urlPattern: "*/api/pitch/sample-assistants/*/answers/*/speech", requestStage: "Request" },
       { urlPattern: "*/api/voice/transcribe", requestStage: "Request" },
       { urlPattern: "*/api/voice/speak", requestStage: "Request" },
+      { urlPattern: "*/api/assistants/*/voice/transcribe", requestStage: "Request" },
+      { urlPattern: "*/api/shared/*/voice/transcribe", requestStage: "Request" },
       { urlPattern: "*/api/assistants/*/answers/*/speech", requestStage: "Request" },
       { urlPattern: "*/api/shared/*/answers/*/speech", requestStage: "Request" },
     ] });
     await call("Page.addScriptToEvaluateOnNewDocument", { source: `
       window.__phases = [];
       window.addEventListener("pitchroom:voice-phase", (event) => window.__phases.push(event.detail.phase));
+      window.__denyMic = false;
       navigator.mediaDevices.getUserMedia = async () => {
+        if (window.__denyMic) throw new DOMException("Microphone permission denied", "NotAllowedError");
+        if (location.pathname === "/studio" || location.pathname.startsWith("/s/")) {
+          return { getTracks: () => [{ stop() {} }] };
+        }
         const context = new AudioContext();
         const oscillator = context.createOscillator();
         const gain = context.createGain();
@@ -132,6 +147,22 @@ test("voice plus a private sample assistant from setup through published revocat
         window.__micStream = destination.stream;
         return destination.stream;
       };
+      const NativeMediaRecorder = window.MediaRecorder;
+      class StudioMediaRecorder extends EventTarget {
+        static isTypeSupported() { return true; }
+        constructor(stream, options = {}) { super(); this.stream = stream; this.mimeType = options.mimeType || "audio/webm"; this.state = "inactive"; }
+        start() { this.state = "recording"; }
+        stop() {
+          this.state = "inactive";
+          const data = new Event("dataavailable");
+          data.data = new Blob([new Uint8Array(600)], { type: this.mimeType });
+          this.dispatchEvent(data);
+          this.dispatchEvent(new Event("stop"));
+        }
+      }
+      Object.defineProperty(window, "MediaRecorder", { configurable: true, get() {
+        return location.pathname === "/studio" || location.pathname.startsWith("/s/") ? StudioMediaRecorder : NativeMediaRecorder;
+      } });
       // Keep browser TTS timing deterministic without calling a provider.
       window.__ttsDelay = 500;
       window.speechSynthesis.speak = (utterance) => setTimeout(() => utterance.onend?.(), window.__ttsDelay);
@@ -143,17 +174,20 @@ test("voice plus a private sample assistant from setup through published revocat
     await call("Page.navigate", { url: `http://127.0.0.1:${appPort}/` });
     try {
       await until(() => evaluate("document.querySelector('#stage-card')?.classList.contains('is-ready') && document.querySelector('#source-name-top')?.textContent !== 'Loading…'"), 20000);
+      await until(() => evaluate("document.querySelector('#voice-readiness')?.textContent.includes('voice ready')"), 20000);
     } catch (error) {
       const detail = await evaluate("JSON.stringify({ url: location.href, ready: document.readyState, stage: document.querySelector('#stage-card')?.className, source: document.querySelector('#source-name-top')?.textContent, error: document.querySelector('#voice-error')?.textContent })");
       throw new Error(`${error.message}: ${detail}; browserErrors=${errors.join('; ')}`);
     }
-    assert.match(await evaluate("document.querySelector('.source-note').textContent"), /shared.*private assistants/i);
+    assert.match(await evaluate("document.querySelector('.source-note').textContent"), /fictional.*public.*private assistants/i);
+    assert.equal(await evaluate("document.querySelectorAll('.sample-card').length"), 5);
+    assert.equal(await evaluate("document.querySelector('#live-toggle-stage').disabled"), false);
     assert.equal(await evaluate("document.querySelector('#source-upload')"), null);
 
     await evaluate("document.querySelector('[data-ask-now]').click()");
-    assert.equal(await evaluate("document.querySelector('#agent-trace-status').textContent"), "Finding source evidence");
+    await until(() => evaluate("document.querySelector('#source-name-top').textContent === 'weekly-project-update.pptx' && document.querySelector('#agent-trace-status').textContent === 'Finding source evidence'"));
     await until(() => evaluate("document.querySelector('#grounding-badge').textContent === 'Grounded in source' && document.querySelectorAll('#evidence-list blockquote').length > 0"));
-    assert.match(await evaluate("document.querySelector('#answer-copy').textContent"), /pitch|founder|deck/i);
+    assert.match(await evaluate("document.querySelector('#answer-copy').textContent"), /CSV date bug|Mei owns the fix/i);
     assert.equal(await evaluate("document.querySelector('#source-peek').hidden"), false);
     assert.ok(await evaluate("document.querySelector('#source-peek-citation').textContent.length > 0"));
     assert.ok(await evaluate("document.querySelector('#source-peek-text').textContent.length > 0"));
@@ -163,7 +197,12 @@ test("voice plus a private sample assistant from setup through published revocat
     assert.match(await evaluate("document.querySelector('#answer-copy').textContent"), /could not find/i);
     assert.equal(await evaluate("document.querySelector('#source-peek').hidden"), true);
 
-    await evaluate("document.querySelector('#live-toggle-stage').click()");
+    await evaluate("window.__denyMic = true; document.querySelector('#live-toggle-stage').click()");
+    await until(() => evaluate("document.documentElement.dataset.voicePhase === 'error'") );
+    assert.match(await evaluate("document.querySelector('#voice-error').textContent"), /microphone access was not allowed/i);
+    assert.equal(await evaluate("!document.querySelector('#text-question-form').hidden"), true);
+
+    await evaluate("window.__denyMic = false; document.querySelector('#live-toggle-stage').click()");
     await until(() => evaluate("document.documentElement.dataset.voicePhase === 'listening'"));
     assert.equal(await evaluate("document.querySelector('#live-toggle-stage').getAttribute('aria-pressed')"), "true");
     await new Promise((resolve) => setTimeout(resolve, 1000)); // let noise calibration finish
@@ -176,7 +215,7 @@ test("voice plus a private sample assistant from setup through published revocat
       const detail = await evaluate("JSON.stringify({ phases: window.__phases, status: document.querySelector('#voice-error').textContent, readiness: document.querySelector('#voice-readiness').textContent })");
       throw new Error(`${error.message}: ${detail}; transcriptions=${transcriptions}; speeches=${speeches}`);
     }
-    assert.equal(await evaluate("document.querySelector('#heard-question').textContent"), "What problem does Pitchroom AI solve?");
+    assert.equal(await evaluate("document.querySelector('#heard-question').textContent"), "What is blocking the launch?");
     assert.equal(await evaluate("document.querySelector('#grounding-badge').textContent"), "Grounded in source");
     assert.equal(transcriptions, 1);
     assert.equal(speeches, 0);
@@ -201,6 +240,26 @@ test("voice plus a private sample assistant from setup through published revocat
     assert.equal(await evaluate("document.querySelector('#live-toggle-stage').getAttribute('aria-pressed')"), "false");
     assert.equal(await evaluate("window.__micStream.getTracks().every((track) => track.readyState === 'ended')"), true);
 
+    failNextTranscription = true;
+    await evaluate("window.__phases = []; document.querySelector('#live-toggle-stage').click()");
+    await until(() => evaluate("document.documentElement.dataset.voicePhase === 'listening'"));
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    await evaluate("window.__micGain.value = 0.2");
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    await evaluate("window.__micGain.value = 0");
+    await until(() => evaluate("document.querySelector('#voice-error').textContent.includes('transcription provider is unavailable')"));
+    assert.equal(await evaluate("!document.querySelector('#text-question-form').hidden"), true);
+    await evaluate("document.querySelector('#live-toggle-stage').click()");
+    await until(() => evaluate("document.documentElement.dataset.voicePhase === 'ready'"));
+    await evaluate("document.querySelector('#text-question').value = 'What is blocking the launch?'; document.querySelector('#text-question-form').requestSubmit()");
+    await until(() => evaluate("document.querySelector('#grounding-badge').textContent === 'Grounded in source'"));
+
+    await evaluate("document.querySelector('[data-sample-load=course-companion]').click()");
+    await until(() => evaluate("document.querySelector('#source-name-top').textContent === 'course-lesson-guide.md'"));
+    await evaluate("document.querySelector('#text-question').value = 'What are the three steps in Lesson 3?'; document.querySelector('#text-question-form').requestSubmit()");
+    await until(() => evaluate("document.querySelector('#grounding-badge').textContent === 'Grounded in source'"));
+    assert.match(await evaluate("document.querySelector('#source-peek-citation').textContent"), /course-lesson-guide\.md.*Source section/i);
+
     await call("Page.navigate", { url: `http://127.0.0.1:${appPort}/studio` });
     await until(() => evaluate("document.querySelector('#auth-view') && !document.querySelector('#auth-view').hidden"));
     await evaluate(`
@@ -224,8 +283,9 @@ test("voice plus a private sample assistant from setup through published revocat
     await until(() => evaluate("window.innerWidth === 1440"));
     await evaluate("document.querySelector('#starter-template-list .primary-button').focus()");
     assert.equal(await evaluate("document.activeElement === document.querySelector('#starter-template-list .primary-button')"), true);
-    await call("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
-    await call("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
+    const nativeEnterCode = process.platform === "darwin" ? 36 : 13;
+    await call("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", text: "\r", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: nativeEnterCode });
+    await call("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: nativeEnterCode });
     await until(() => evaluate("document.querySelectorAll('#assistant-list button').length === 1 && document.querySelectorAll('.source-item').length === 2"));
     assert.equal(await evaluate("document.querySelector('#setup-view').hidden"), true);
     assert.equal(await evaluate("[...document.querySelectorAll('.source-check')].every((item) => !item.checked)"), true);
@@ -245,10 +305,12 @@ test("voice plus a private sample assistant from setup through published revocat
     await until(() => evaluate("[...document.querySelectorAll('.source-kind')].every((item) => item.textContent.includes('Approved'))"));
     await until(() => evaluate("[...document.querySelectorAll('#conversation .prompt-chips button')].some((button) => button.textContent === 'How do I request system access?')"));
     await evaluate("document.querySelector('#voice-question').click()");
-    await until(() => evaluate("document.querySelector('#question-message').textContent.includes('type your question')"));
-    await evaluate("document.querySelector('#question-input').value = 'How do I request system access?'; document.querySelector('#question-form').requestSubmit()");
+    await until(() => evaluate("document.querySelector('#voice-question .mic-label').textContent === 'Finish recording'"));
+    await evaluate("document.querySelector('#voice-question').click()");
     await until(() => evaluate("document.querySelector('#conversation .message-answer')?.textContent.includes('Morgan')"));
+    assert.equal(await evaluate("document.querySelector('#conversation .message-question')?.textContent"), "How do I request system access?");
     assert.match(await evaluate("document.querySelector('#conversation .message-answer .evidence').textContent"), /new-starter-guide\.pptx.*Slide 4/i);
+    assert.equal(transcriptions, 5);
     await until(() => evaluate("document.querySelector('#conversation .answer-feedback button')?.textContent === 'Play again'"));
     await evaluate("document.querySelector('#conversation .answer-feedback button').click()");
     await until(() => evaluate("document.querySelector('#conversation .answer-feedback button')?.textContent === 'Play again'"));
@@ -274,14 +336,18 @@ test("voice plus a private sample assistant from setup through published revocat
     await call("Page.navigate", { url: shareUrl });
     await until(() => evaluate("!document.querySelector('#shared-workspace').hidden && document.querySelector('#shared-name').textContent.length > 0"));
     assert.equal(await evaluate("document.querySelectorAll('.shared-source-pill').length"), 2);
-    await evaluate("document.querySelector('#shared-question-input').value = 'How do I request system access?'; document.querySelector('#shared-question-form').requestSubmit()");
+    await evaluate("document.querySelector('#shared-voice-question').click()");
+    await until(() => evaluate("document.querySelector('#shared-voice-question .mic-label').textContent === 'Finish recording'"));
+    await evaluate("document.querySelector('#shared-voice-question').click()");
     await until(() => evaluate("document.querySelector('#shared-conversation .message-answer')?.textContent.includes('Morgan')"));
+    assert.equal(await evaluate("document.querySelector('#shared-conversation .message-question')?.textContent"), "How do I request system access?");
     assert.match(await evaluate("document.querySelector('#shared-conversation .message-answer .evidence').textContent"), /new-starter-guide\.pptx.*Slide 4/i);
     await until(() => evaluate("document.querySelector('#shared-conversation .answer-feedback button')?.textContent === 'Play again'"));
     await evaluate("document.querySelector('#shared-question-input').value = 'Does it guarantee account access tomorrow?'; document.querySelector('#shared-question-form').requestSubmit()");
     await until(() => evaluate("document.querySelectorAll('#shared-conversation .message-answer').length === 2"));
     assert.match(await evaluate("[...document.querySelectorAll('#shared-conversation .message-answer')].at(-1).textContent"), /could not find/i);
     assert.equal(speeches, 4);
+    assert.equal(transcriptions, 6);
     await call("Page.navigate", { url: `http://127.0.0.1:${appPort}/studio` });
     await until(() => evaluate("!document.querySelector('#owner-workspace').hidden && document.querySelectorAll('#assistant-list button').length === 1"));
     await evaluate("document.querySelector('#unpublish-assistant').click()");

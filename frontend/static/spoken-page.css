@@ -162,6 +162,11 @@ html[data-story-step="2"] .scene-answer { --scene-scale: 1; --scene-rotate: -1de
 .source-card .eyebrow, .evidence-card .eyebrow { font-size: 10px; }
 .sample-card { background: #fcfaf6; }
 .sample-card.is-selected { border-color: #816795; box-shadow: inset 0 0 0 1px #816795; }
+.sample-audience { margin-bottom: 9px; padding: 5px 9px; border: 1px solid #ded3e8; border-radius: 20px; color: #66527b; background: #f3edf8; font-size: 10px; font-weight: 700; letter-spacing: .04em; }
+.sample-sources { min-height: 0 !important; margin: 0 0 12px !important; color: #887e8e !important; font-size: 10px !important; }
+.sample-actions .sample-load { width: 100%; justify-content: center; }
+.sample-question { width: 100%; text-decoration: none; }
+.sample-question:hover { text-decoration: underline; }
 .cta-section { min-height: 650px; display: flex; align-items: center; padding-block: 100px; }
 .cta-copy { max-width: 800px; }
 .cta-copy h2 { font-size: clamp(65px,7vw,102px); font-weight: 400; }

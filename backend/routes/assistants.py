@@ -49,6 +49,9 @@ from routes.pitch import (
     _token_stem,
     _speech_audio,
     _speech_provider,
+    _transcribe_audio_file,
+    _transcription_provider,
+    _transcription_error,
     _warm_kokoro_voice,
     _read_limited_document_upload,
     _document_upload_limit,
@@ -119,7 +122,8 @@ def _connect() -> sqlite3.Connection:
             id TEXT PRIMARY KEY, assistant_id TEXT NOT NULL REFERENCES assistants(id) ON DELETE CASCADE,
             grounded INTEGER NOT NULL, latency_ms INTEGER NOT NULL, created_at TEXT NOT NULL,
             retrieval_method TEXT NOT NULL DEFAULT 'lexical', embedding_tokens INTEGER NOT NULL DEFAULT 0,
-            session_id TEXT NOT NULL DEFAULT '', estimated_cost_usd REAL NOT NULL DEFAULT 0
+            session_id TEXT NOT NULL DEFAULT '', estimated_cost_usd REAL NOT NULL DEFAULT 0,
+            spoken_answer_hash TEXT NOT NULL DEFAULT ''
         );
         CREATE TABLE IF NOT EXISTS retrieval_embeddings (
             content_hash TEXT NOT NULL, model TEXT NOT NULL, vector TEXT NOT NULL,
@@ -140,6 +144,8 @@ def _connect() -> sqlite3.Connection:
         db.execute("ALTER TABLE answers ADD COLUMN session_id TEXT NOT NULL DEFAULT ''")
     if "estimated_cost_usd" not in answer_columns:
         db.execute("ALTER TABLE answers ADD COLUMN estimated_cost_usd REAL NOT NULL DEFAULT 0")
+    if "spoken_answer_hash" not in answer_columns:
+        db.execute("ALTER TABLE answers ADD COLUMN spoken_answer_hash TEXT NOT NULL DEFAULT ''")
     db.execute("UPDATE answers SET session_id=id WHERE session_id='' ")
     return db
 
@@ -945,27 +951,35 @@ def answer_owner(assistant_id: str, payload: AskRequest, request: Request) -> di
         _answer_budget(db, assistant_id)
         store = _source_store(db, assistant_id)
         result = _answer(store, payload, db)
-        db.execute("INSERT INTO answers(id,assistant_id,grounded,latency_ms,created_at,retrieval_method,embedding_tokens,session_id,estimated_cost_usd) VALUES(?,?,?,?,?,?,?,?,?)",
-                   (result["answer_id"], assistant_id, int(result["grounded"]), result["latency_ms"], _now(), result["retrieval_mode"], result["embedding_tokens"], payload.session_id[:64] or result["answer_id"], result["estimated_cost_usd"]))
+        spoken_answer_hash = hashlib.sha256(result["spoken_answer"].encode()).hexdigest()
+        db.execute("INSERT INTO answers(id,assistant_id,grounded,latency_ms,created_at,retrieval_method,embedding_tokens,session_id,estimated_cost_usd,spoken_answer_hash) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                   (result["answer_id"], assistant_id, int(result["grounded"]), result["latency_ms"], _now(), result["retrieval_mode"], result["embedding_tokens"], payload.session_id[:64] or result["answer_id"], result["estimated_cost_usd"], spoken_answer_hash))
     return result
 
 
 def _warm_voice() -> dict:
     provider = _speech_provider()
+    transcription_error = _transcription_error()
+    transcription = {
+        "transcription_provider": _transcription_provider(),
+        "transcription_ready": transcription_error is None,
+        "transcription_error": transcription_error,
+    }
     if provider != "kokoro":
-        return {"provider": provider, "warmed": False}
+        return {"provider": provider, "warmed": False, **transcription}
     try:
         warmed = _warm_kokoro_voice()
     except RuntimeError as exc:
         raise HTTPException(503, str(exc)) from exc
-    return {"provider": provider, "warmed": warmed}
+    return {"provider": provider, "warmed": warmed, **transcription}
 
 
-def _answer_for_speech(db: sqlite3.Connection, assistant_id: str, answer_id: str) -> None:
+def _answer_for_speech(db: sqlite3.Connection, assistant_id: str, answer_id: str, text: str) -> None:
     answer = db.execute(
-        "SELECT grounded FROM answers WHERE id=? AND assistant_id=?", (answer_id, assistant_id)
+        "SELECT grounded,spoken_answer_hash FROM answers WHERE id=? AND assistant_id=?", (answer_id, assistant_id)
     ).fetchone()
-    if not answer or not answer["grounded"]:
+    text_hash = hashlib.sha256(text.encode()).hexdigest()
+    if not answer or not answer["grounded"] or not hmac.compare_digest(text_hash, answer["spoken_answer_hash"]):
         raise HTTPException(404, "Speech is available only for a grounded answer.")
 
 
@@ -989,6 +1003,14 @@ def warm_owner_voice(assistant_id: str, request: Request) -> dict:
     return _warm_voice()
 
 
+@router.post("/api/assistants/{assistant_id}/voice/transcribe")
+async def transcribe_owner_voice(assistant_id: str, request: Request, file: UploadFile = File(...)) -> dict[str, str]:
+    user_id = _user_id(request)
+    with _connect() as db:
+        _assistant(db, assistant_id, user_id)
+    return await _transcribe_audio_file(file)
+
+
 @router.post("/api/assistants/{assistant_id}/answers/{answer_id}/speech")
 def speak_owner_answer(
     assistant_id: str, answer_id: str, payload: AnswerSpeechRequest, request: Request
@@ -996,7 +1018,7 @@ def speak_owner_answer(
     user_id = _user_id(request)
     with _connect() as db:
         _assistant(db, assistant_id, user_id)
-        _answer_for_speech(db, assistant_id, answer_id)
+        _answer_for_speech(db, assistant_id, answer_id, payload.text)
     return _speech_response(payload.text, assistant_id)
 
 
@@ -1082,14 +1104,21 @@ def warm_shared_voice(share_token: str) -> dict:
     return _warm_voice()
 
 
+@router.post("/api/shared/{share_token}/voice/transcribe")
+async def transcribe_shared_voice(share_token: str, file: UploadFile = File(...)) -> dict[str, str]:
+    _published(share_token)
+    return await _transcribe_audio_file(file)
+
+
 @router.post("/api/shared/{share_token}/answer")
 def shared_answer(share_token: str, payload: AskRequest) -> dict:
     _, snapshot = _published(share_token)
     with _connect() as db:
         _answer_budget(db, snapshot["assistant_id"])
         result = _answer(_snapshot_store(snapshot), payload, db)
-        db.execute("INSERT INTO answers(id,assistant_id,grounded,latency_ms,created_at,retrieval_method,embedding_tokens,session_id,estimated_cost_usd) VALUES(?,?,?,?,?,?,?,?,?)",
-                   (result["answer_id"], snapshot["assistant_id"], int(result["grounded"]), result["latency_ms"], _now(), result["retrieval_mode"], result["embedding_tokens"], payload.session_id[:64] or result["answer_id"], result["estimated_cost_usd"]))
+        spoken_answer_hash = hashlib.sha256(result["spoken_answer"].encode()).hexdigest()
+        db.execute("INSERT INTO answers(id,assistant_id,grounded,latency_ms,created_at,retrieval_method,embedding_tokens,session_id,estimated_cost_usd,spoken_answer_hash) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                   (result["answer_id"], snapshot["assistant_id"], int(result["grounded"]), result["latency_ms"], _now(), result["retrieval_mode"], result["embedding_tokens"], payload.session_id[:64] or result["answer_id"], result["estimated_cost_usd"], spoken_answer_hash))
     return result
 
 
@@ -1099,7 +1128,7 @@ def speak_shared_answer(
 ) -> Response:
     _, snapshot = _published(share_token)
     with _connect() as db:
-        _answer_for_speech(db, snapshot["assistant_id"], answer_id)
+        _answer_for_speech(db, snapshot["assistant_id"], answer_id, payload.text)
     return _speech_response(payload.text, snapshot["assistant_id"])
 
 

@@ -3,7 +3,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 import app
-from routes import assistants
+from routes import assistants, pitch as pitch_routes
 
 
 @pytest.fixture
@@ -102,7 +102,12 @@ def test_starter_library_is_public_read_only(clients):
     guest = TestClient(app.app, base_url="http://localhost")
     samples = guest.get("/api/pitch/samples")
     assert samples.status_code == 200
-    assert len(guest.get("/api/pitch/assistant-templates").json()) == 5
+    templates = guest.get("/api/pitch/assistant-templates").json()
+    assert len(templates) == 5
+    for template in templates:
+        detail = guest.get(f"/api/pitch/sample-assistants/{template['id']}")
+        assert detail.status_code == 200
+        assert detail.json()["sources"]
     for sample in samples.json():
         download = guest.get(sample["download_url"])
         assert download.status_code == 200
@@ -116,6 +121,49 @@ def test_starter_library_is_public_read_only(clients):
     assert markdown_demo.json()["metadata"]["format"] == "markdown"
     assert guest.post("/api/pitch/sample/team-handbook").status_code == 401
     assert guest.post("/api/assistants/from-sample/team-onboarding").status_code == 401
+    assert guest.post("/api/voice/answer", json={"question": "What is in the room-wide document?"}).status_code == 401
+
+
+def test_public_sample_assistants_answer_from_isolated_snapshots_and_limit_speech(clients, monkeypatch):
+    guest = TestClient(app.app, base_url="http://localhost")
+    examples = {
+        "team-onboarding": ("How do I request system access?", "new-starter-guide.pptx · Slide 4"),
+        "project-delivery": ("What is blocking the launch?", "weekly-project-update.pptx · Slide 4"),
+        "customer-kickoff": ("Who sends the weekly recap?", "customer-success-plan.pptx · Slide 5"),
+        "course-companion": ("What are the three steps in Lesson 3?", "course-lesson-guide.md · Source section"),
+        "consulting-services": ("How many interviews are included in the sprint?", "consulting-service-guide.md · Source section"),
+    }
+    answers = {}
+    for assistant_id, (question, citation) in examples.items():
+        response = guest.post(f"/api/pitch/sample-assistants/{assistant_id}/answer", json={"question": question})
+        assert response.status_code == 200, response.text
+        answer = response.json()
+        assert answer["grounded"] is True
+        assert any(citation in ref["citation"] for ref in answer["source_refs"])
+        assert answer["speech_id"]
+        answers[assistant_id] = answer
+
+    project_path = "/api/pitch/sample-assistants/project-delivery/answer"
+    assert guest.post(project_path, json={"question": "What is blocking the launch?"}).json()["grounded"] is True
+    course = guest.post("/api/pitch/sample-assistants/course-companion/answer", json={
+        "question": "What is blocking the launch?",
+    }).json()
+    assert course["grounded"] is False
+    assert guest.post(project_path, json={"question": "What is blocking the launch?"}).json()["grounded"] is True
+
+    spoken_text = []
+    monkeypatch.setattr(pitch_routes, "_speech_audio", lambda text, voice=None: spoken_text.append(text) or (b"wav", "audio/wav"))
+    speech = guest.post(
+        f"/api/pitch/sample-assistants/project-delivery/answers/{answers['project-delivery']['speech_id']}/speech",
+        json={"text": "untrusted caller text"},
+    )
+    assert speech.status_code == 200
+    assert speech.content == b"wav"
+    assert spoken_text == [answers["project-delivery"]["spoken_answer"]]
+    wrong_assistant = guest.post(
+        f"/api/pitch/sample-assistants/course-companion/answers/{answers['project-delivery']['speech_id']}/speech",
+    )
+    assert wrong_assistant.status_code == 404
 
 
 def test_sample_assistant_templates_are_private_reviewable_and_atomic(clients, monkeypatch):
@@ -227,6 +275,27 @@ def test_sample_assistant_suggested_questions_have_named_support(clients):
     assert any("team-handbook.pptx" in ref["citation"] and "Slide 4" in ref["citation"] for ref in answer["source_refs"])
 
 
+@pytest.mark.parametrize(("assistant_id", "question", "spoken_facts"), [
+    ("project-delivery", "Who owns the export retest, and when?", ("Mei", "18 July")),
+    ("project-delivery", "What is the fallback if a check fails?", ("six teams", "21 July")),
+    ("customer-kickoff", "What outcome did the customer agree to by day 30?", ("14 of the 18 users", "day 30")),
+    ("customer-kickoff", "Who sends the weekly recap?", ("Priya", "weekly recap")),
+    ("course-companion", "What are the three steps in Lesson 3?", ("highlight the participant’s exact words", "supported by those observations")),
+    ("consulting-services", "How long does the sprint take?", ("four-week",)),
+])
+def test_sample_voice_reply_speaks_the_requested_source_facts(clients, assistant_id, question, spoken_facts):
+    guest = TestClient(app.app, base_url="http://localhost")
+
+    response = guest.post(f"/api/pitch/sample-assistants/{assistant_id}/answer", json={"question": question})
+
+    assert response.status_code == 200
+    answer = response.json()
+    assert answer["grounded"] is True
+    spoken = answer["spoken_answer"].casefold()
+    assert all(fact.casefold() in spoken for fact in spoken_facts), spoken
+    assert not spoken.startswith("##")
+
+
 def test_kokoro_speech_is_limited_to_grounded_owner_and_published_answers(clients, monkeypatch):
     first, second = clients
     assistant = first.post("/api/assistants", json={"name": "Customer guide"}).json()
@@ -242,12 +311,21 @@ def test_kokoro_speech_is_limited_to_grounded_owner_and_published_answers(client
     monkeypatch.setattr(assistants, "_warm_kokoro_voice", lambda: warmed.append(True) or True)
     monkeypatch.setattr(assistants, "_speech_audio", lambda text: (generated.append(text) or b"kokoro-wav", "audio/wav"))
 
-    assert first.post(f"{path}/voice/warm").json() == {"provider": "kokoro", "warmed": True}
+    monkeypatch.setenv("ASR_PROVIDER", "local")
+    monkeypatch.setattr(pitch_routes, "find_spec", lambda name: object())
+    monkeypatch.setattr(assistants, "_transcription_provider", lambda: "whisper-local")
+    assert first.post(f"{path}/voice/warm").json() == {
+        "provider": "kokoro", "warmed": True, "transcription_provider": "whisper-local",
+        "transcription_ready": True, "transcription_error": None,
+    }
     assert second.post(f"{path}/voice/warm").status_code == 404
     answer = first.post(f"{path}/answer", json={
         "question": "How long do customers have to request a refund?",
     }).json()
     speech_path = f"{path}/answers/{answer['answer_id']}/speech"
+    spoofed_speech = first.post(speech_path, json={"text": "The product launches tomorrow."})
+    assert spoofed_speech.status_code == 404
+    assert generated == []
     speech = first.post(speech_path, json={"text": answer["spoken_answer"]})
     assert speech.status_code == 200
     assert speech.headers["content-type"] == "audio/wav"
@@ -265,16 +343,96 @@ def test_kokoro_speech_is_limited_to_grounded_owner_and_published_answers(client
     assert len(generated) == 1
 
     token = first.post(f"{path}/publish").json()["url"].split("/")[-1]
-    assert first.post(f"/api/shared/{token}/voice/warm").json() == {"provider": "kokoro", "warmed": True}
+    assert first.post(f"/api/shared/{token}/voice/warm").json() == {
+        "provider": "kokoro", "warmed": True, "transcription_provider": "whisper-local",
+        "transcription_ready": True, "transcription_error": None,
+    }
     shared_answer = first.post(f"/api/shared/{token}/answer", json={
         "question": "How long do customers have to request a refund?",
     }).json()
     shared_path = f"/api/shared/{token}/answers/{shared_answer['answer_id']}/speech"
+    assert first.post(shared_path, json={"text": "The product launches tomorrow."}).status_code == 404
     shared_speech = first.post(shared_path, json={"text": shared_answer["spoken_answer"]})
     assert shared_speech.status_code == 200
     assert generated[-1] == shared_answer["spoken_answer"]
     first.delete(f"{path}/publish")
     assert first.post(shared_path, json={"text": shared_answer["spoken_answer"]}).status_code == 404
+
+
+def test_voice_warm_reports_missing_hosted_transcription_setup(clients, monkeypatch):
+    first, _ = clients
+    assistant = first.post("/api/assistants", json={"name": "Team handbook"}).json()
+    monkeypatch.setenv("TTS_PROVIDER", "kokoro")
+    monkeypatch.setenv("ASR_PROVIDER", "huggingface")
+    monkeypatch.setenv("HUGGINGFACE_API_TOKEN", "")
+    monkeypatch.setattr(assistants, "_speech_provider", lambda: "kokoro")
+    monkeypatch.setattr(assistants, "_warm_kokoro_voice", lambda: True)
+
+    result = first.post(f"/api/assistants/{assistant['id']}/voice/warm").json()
+
+    assert result["provider"] == "kokoro"
+    assert result["transcription_provider"] == "huggingface"
+    assert result["transcription_ready"] is False
+    assert result["transcription_error"] == "Set HUGGINGFACE_API_TOKEN in .env to transcribe audio."
+
+
+def test_homepage_and_studio_use_the_same_kokoro_synthesizer(clients, monkeypatch):
+    first, _ = clients
+    assistant = first.post("/api/assistants", json={"name": "Team handbook"}).json()
+    path = f"/api/assistants/{assistant['id']}"
+    first.post(f"{path}/sources/files", files={
+        "file": ("guide.txt", b"Employees receive 20 days of annual leave.", "text/plain"),
+    })
+    source = first.get(path).json()["sources"][0]
+    first.patch(f"{path}/sources/{source['id']}", json={"approved": True})
+    monkeypatch.setenv("TTS_PROVIDER", "kokoro")
+    calls = []
+    monkeypatch.setattr(pitch_routes, "_kokoro_audio", lambda text: calls.append(text) or b"same-kokoro-wav")
+    answer = first.post(f"{path}/answer", json={"question": "How much annual leave do employees receive?"}).json()
+
+    homepage_speech = first.post(
+        "/api/voice/speak", json={"text": answer["spoken_answer"]},
+        headers={"Authorization": "Bearer pilot-invite"},
+    )
+    studio_speech = first.post(
+        f"{path}/answers/{answer['answer_id']}/speech", json={"text": answer["spoken_answer"]},
+    )
+
+    assert homepage_speech.status_code == studio_speech.status_code == 200
+    assert homepage_speech.content == studio_speech.content == b"same-kokoro-wav"
+    assert calls == [answer["spoken_answer"], answer["spoken_answer"]]
+
+
+def test_voice_transcription_is_scoped_to_owner_or_published_link(clients, monkeypatch):
+    first, second = clients
+    assistant = first.post("/api/assistants", json={"name": "Customer guide"}).json()
+    path = f"/api/assistants/{assistant['id']}"
+    first.post(f"{path}/sources/files", files={
+        "file": ("faq.txt", b"Customers can request a refund within 30 days.", "text/plain"),
+    })
+    source = first.get(path).json()["sources"][0]
+    first.patch(f"{path}/sources/{source['id']}", json={"approved": True})
+    token = first.post(f"{path}/publish").json()["url"].split("/")[-1]
+    calls = []
+
+    async def transcribe(file):
+        calls.append(file.filename)
+        return {"text": "How long is the refund window?", "provider": "whisper-local"}
+
+    monkeypatch.setattr(assistants, "_transcribe_audio_file", transcribe)
+    audio = {"file": ("question.webm", b"recording", "audio/webm")}
+    owner_result = first.post(f"{path}/voice/transcribe", files=audio)
+    assert owner_result.status_code == 200
+    assert owner_result.json() == {"text": "How long is the refund window?", "provider": "whisper-local"}
+    assert second.post(f"{path}/voice/transcribe", files=audio).status_code == 404
+
+    guest = TestClient(app.app, base_url="http://localhost")
+    shared_result = guest.post(f"/api/shared/{token}/voice/transcribe", files=audio)
+    assert shared_result.status_code == 200
+    assert shared_result.json()["text"] == "How long is the refund window?"
+    first.delete(f"{path}/publish")
+    assert guest.post(f"/api/shared/{token}/voice/transcribe", files=audio).status_code == 404
+    assert calls == ["question.webm", "question.webm"]
 
 
 def test_speech_budget_is_per_assistant_and_expires(monkeypatch):

@@ -45,18 +45,30 @@ function stopSpeech() {
   if (url) URL.revokeObjectURL(url);
 }
 
-function setVoiceDisclosure(provider) {
+function setVoiceDisclosure(provider, transcriptionProvider, transcriptionReady, transcriptionError) {
   const voice = provider === "kokoro" ? "Kokoro’s local English voice"
     : provider === "browser" ? "your browser’s voice" : "the selected speech provider";
+  const transcription = transcriptionProvider === "whisper-local" ? "local Whisper on this server"
+    : transcriptionProvider === "huggingface" && transcriptionReady ? "hosted Whisper (audio is sent to Hugging Face)"
+      : transcriptionError || "this instance’s configured transcription provider";
   document.querySelectorAll(".voice-disclosure").forEach((element) => {
-    element.textContent = `Voice questions use your browser’s speech recognition. Spoken replies use ${voice}. Pitchroom does not retain microphone recordings.`;
+    element.textContent = `Voice questions use ${transcription}. Spoken replies use ${voice}. Recordings are not stored by Pitchroom.`;
   });
 }
 
 async function warmVoice(path, statusId) {
   try {
     const result = await api(path, { method: "POST" });
-    setVoiceDisclosure(result.provider);
+    setVoiceDisclosure(result.provider, result.transcription_provider, result.transcription_ready, result.transcription_error);
+    document.querySelectorAll(".mic-button").forEach((button) => {
+      button.disabled = result.transcription_ready === false;
+      if (result.transcription_ready === false) {
+        button.title = result.transcription_error || "Voice input is unavailable. Type your question instead.";
+      }
+    });
+    if (result.transcription_ready === false) {
+      message($(statusId), `${result.transcription_error || "Voice input is unavailable."} You can type your question instead.`);
+    }
   } catch (error) {
     message($(statusId), `Spoken replies are not ready: ${error.message}. The written answers are still available.`);
   }
@@ -564,26 +576,116 @@ async function ask(question, options = {}) {
 
 function bindVoice(buttonId, inputId, formId, statusId) {
   const button = $(buttonId);
-  const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!Recognition) { button.title = "Voice input is unavailable in this browser."; button.addEventListener("click", () => message($(statusId), "Voice input is not available in this browser. You can type your question instead.")); return; }
-  button.addEventListener("click", () => {
-    const recognition = new Recognition();
-    recognition.lang = navigator.language || "en-US";
-    recognition.interimResults = false;
-    recognition.maxAlternatives = 1;
-    button.classList.add("is-listening");
-    button.disabled = true;
-    button.setAttribute("aria-pressed", "true");
-    message($(statusId), "Listening… speak your question.");
+  const label = button.querySelector(".mic-label");
+  const defaultLabel = label?.textContent || "Ask by voice";
+  const shared = buttonId.startsWith("#shared-");
+  let recorder = null;
+  let stream = null;
+  let chunks = [];
+  let stopTimer = 0;
+  let recordingFailed = false;
+
+  const setButton = (text, pressed, disabled = false) => {
+    if (label) label.textContent = text;
+    button.setAttribute("aria-label", text);
+    button.title = text;
+    button.setAttribute("aria-pressed", String(pressed));
+    button.classList.toggle("is-listening", pressed);
+    button.disabled = disabled;
+  };
+
+  const stopRecording = () => {
+    if (!recorder || recorder.state === "inactive") return;
+    setButton("Transcribing…", false, true);
+    message($(statusId), "Transcribing your question…");
+    recorder.stop();
+  };
+
+  button.addEventListener("click", async () => {
+    if (recorder && recorder.state !== "inactive") { stopRecording(); return; }
+    if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
+      message($(statusId), "Voice recording is not available here. You can type your question instead.");
+      return;
+    }
+
+    const assistantId = state.active?.id;
+    if (!shared && !assistantId) {
+      message($(statusId), "Open an assistant before asking by voice.");
+      return;
+    }
+
+    setButton("Starting microphone…", false, true);
     stopSpeech();
-    recognition.onresult = (event) => {
-      $(inputId).value = event.results[0][0].transcript;
-      $(formId).requestSubmit();
-    };
-    recognition.onerror = () => message($(statusId), "Could not hear that. Please try again or type your question.");
-    recognition.onend = () => { button.classList.remove("is-listening"); button.setAttribute("aria-pressed", "false"); button.disabled = false; };
-    try { recognition.start(); }
-    catch (_) { button.disabled = false; button.classList.remove("is-listening"); button.setAttribute("aria-pressed", "false"); message($(statusId), "Could not start voice input. Please try again or type your question."); }
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"]
+        .find((type) => window.MediaRecorder.isTypeSupported?.(type));
+      recorder = new MediaRecorder(stream, mimeType ? { mimeType } : {});
+      chunks = [];
+      recordingFailed = false;
+      recorder.addEventListener("dataavailable", (event) => {
+        if (event.data?.size) chunks.push(event.data);
+      });
+      recorder.addEventListener("stop", async () => {
+        window.clearTimeout(stopTimer);
+        stream?.getTracks().forEach((track) => track.stop());
+        stream = null;
+        if (recordingFailed) {
+          chunks = [];
+          recorder = null;
+          setButton(defaultLabel, false);
+          message($(statusId), "The microphone recording failed. Please try again or type your question.");
+          return;
+        }
+        const blob = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
+        chunks = [];
+        recorder = null;
+        if (blob.size < 400) {
+          setButton(defaultLabel, false);
+          message($(statusId), "No clear speech was recorded. Try again or type your question.");
+          return;
+        }
+
+        const type = blob.type || "audio/webm";
+        const extension = type.includes("mp4") ? "mp4" : "webm";
+        const formData = new FormData();
+        formData.append("file", new File([blob], `pitchroom-question.${extension}`, { type }));
+        const transcribePath = shared
+          ? `/api/shared/${encodeURIComponent(state.shareToken)}/voice/transcribe`
+          : `/api/assistants/${encodeURIComponent(assistantId)}/voice/transcribe`;
+        try {
+          const result = await api(transcribePath, { method: "POST", body: formData });
+          const question = String(result.text || "").trim();
+          if (!question) throw new Error("No speech was detected. Try again or type your question.");
+          $(inputId).value = question;
+          if (!shared && state.active?.id !== assistantId) {
+            message($(statusId), "Your question is transcribed. Review it, then ask the currently selected assistant.");
+            setButton(defaultLabel, false);
+            return;
+          }
+          setButton(defaultLabel, false);
+          $(formId).requestSubmit();
+        } catch (error) {
+          setButton(defaultLabel, false);
+          message($(statusId), `${error.message} You can type your question instead.`);
+        }
+      }, { once: true });
+      recorder.addEventListener("error", () => {
+        recordingFailed = true;
+        if (recorder?.state !== "inactive") recorder.stop();
+      }, { once: true });
+      recorder.start(200);
+      setButton("Finish recording", true);
+      message($(statusId), "Listening… select Finish recording when your question is complete.");
+      stopTimer = window.setTimeout(stopRecording, 25000);
+    } catch (error) {
+      stream?.getTracks().forEach((track) => track.stop());
+      stream = null;
+      recorder = null;
+      setButton(defaultLabel, false);
+      const denied = error.name === "NotAllowedError" || error.name === "SecurityError";
+      message($(statusId), `${denied ? "Microphone access was denied." : "Could not start the microphone."} Please try again or type your question.`);
+    }
   });
 }
 

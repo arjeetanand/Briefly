@@ -12,7 +12,7 @@ from config import load_environment, setting
 
 load_environment()
 
-from routes.pitch import router, store
+from routes.pitch import router, store, SAMPLE_ASSISTANT_TEMPLATES
 from routes.assistants import router as assistants_router
 from mcp_server import server as pitch_mcp_server
 
@@ -54,12 +54,29 @@ allowed_origins = [
 @app.middleware("http")
 async def require_room_token(request: Request, call_next):
     workspace_api = request.url.path.startswith(("/api/auth/", "/api/assistants", "/api/shared/"))
+    parts = request.url.path.split("/")
+    sample_assistant = (
+        len(parts) >= 5
+        and parts[1:4] == ["api", "pitch", "sample-assistants"]
+        and parts[4] in SAMPLE_ASSISTANT_TEMPLATES
+    )
+    public_sample_demo = (
+        sample_assistant
+        and (
+            request.method == "GET" and len(parts) == 5
+            or request.method == "POST" and (
+                len(parts) == 6 and parts[5] == "answer"
+                or len(parts) == 7 and parts[5] == "voice" and parts[6] in {"warm", "transcribe"}
+                or len(parts) == 8 and parts[5] == "answers" and parts[7] == "speech"
+            )
+        )
+    )
     public_sample_asset = request.method == "GET" and (
         request.url.path == "/api/pitch/samples"
         or request.url.path == "/api/pitch/assistant-templates"
         or (request.url.path.startswith("/api/pitch/sample/") and request.url.path.endswith("/file"))
     )
-    if request.method != "OPTIONS" and not workspace_api and not public_sample_asset and (request.url.path == "/api" or request.url.path.startswith("/api/")):
+    if request.method != "OPTIONS" and not workspace_api and not public_sample_asset and not public_sample_demo and (request.url.path == "/api" or request.url.path.startswith("/api/")):
         # The Render launcher fails closed; an empty setting is for loopback development.
         required_token = setting("PITCHROOM_ACCESS_TOKEN")
         if required_token:
