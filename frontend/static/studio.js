@@ -197,7 +197,11 @@ function sourceElement(source) {
   actions.append(remove);
   top.append(checkbox, title, actions);
   card.append(top);
-  const sample = source.sections?.slice(0, 2).map((part) => part.text).join(" ") || "No readable text was extracted.";
+  const previewSections = source.sections?.slice(0, 2) || [];
+  const ocrPages = source.metadata?.ocr_pages || [];
+  const ocrPreview = source.sections?.find((part) => ocrPages.some((page) => part.citation.endsWith(`Page ${page}`)));
+  if (ocrPreview && !previewSections.includes(ocrPreview)) previewSections.push(ocrPreview);
+  const sample = previewSections.map((part) => part.text).join(" ") || "No readable text was extracted.";
   const preview = document.createElement("p");
   preview.className = "source-preview";
   preview.textContent = sample.slice(0, 240);

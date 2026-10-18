@@ -1,3 +1,6 @@
+import shutil
+
+import pymupdf
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
@@ -11,6 +14,7 @@ def clients(tmp_path, monkeypatch):
     monkeypatch.setattr(assistants, "DATABASE_PATH", tmp_path / "pilot.sqlite3")
     monkeypatch.setenv("PITCHROOM_ACCESS_TOKEN", "pilot-invite")
     monkeypatch.setenv("RETRIEVAL_PROVIDER", "lexical")
+    monkeypatch.setenv("ANSWER_GENERATION_PROVIDER", "extractive")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     first = TestClient(app.app, base_url="http://localhost")
     second = TestClient(app.app, base_url="http://localhost")
@@ -595,3 +599,141 @@ def test_semantic_retrieval_caches_source_embeddings(tmp_path, monkeypatch):
         assert scores[0] == pytest.approx(1.0)
         assert tokens == 5
     assert len(calls) == 3
+
+
+def _book_pdf_with_scanned_flowchart() -> bytes:
+    document = pymupdf.open()
+    first = document.new_page()
+    first.insert_textbox(
+        pymupdf.Rect(72, 50, 525, 400),
+        "Chapter 1: Refunds. Customers may request a refund within 30 days of delivery. "
+        "Items must be unused and proof of purchase must be provided. "
+        "Support reviews the request within 2 business days.",
+        fontsize=12,
+    )
+    second = document.new_page()
+    second.insert_textbox(
+        pymupdf.Rect(72, 50, 525, 400),
+        "Chapter 2: Review process. First verify the customer identity. "
+        "Then check the order date and item condition. If approved, issue the refund "
+        "to the original payment method. Notify the customer by email.",
+        fontsize=12,
+    )
+
+    diagram = pymupdf.open()
+    page = diagram.new_page(width=595, height=842)
+    labels = [
+        "START: Request received",
+        "STEP 1: Verify customer identity",
+        "STEP 2: Check order date and item condition",
+        "DECISION: Within 30 days and unused?",
+        "YES: Approve and issue refund",
+        "END: Email customer",
+    ]
+    top = 35
+    for index, label in enumerate(labels):
+        rect = pymupdf.Rect(65, top, 530, top + 92)
+        page.draw_rect(rect, color=(0, 0, 0), width=2)
+        label_rect = pymupdf.Rect(rect.x0 + 12, rect.y0 + 20, rect.x1 - 12, rect.y1 - 20)
+        page.insert_textbox(label_rect, label, fontsize=16, align=1)
+        top += 132
+        if index < len(labels) - 1:
+            page.draw_line((297, top - 40), (297, top - 5), color=(0, 0, 0), width=3)
+    image = page.get_pixmap(matrix=pymupdf.Matrix(2, 2), alpha=False).tobytes("png")
+    scanned_page = document.new_page(width=595, height=842)
+    scanned_page.insert_image(scanned_page.rect, stream=image)
+    mixed_page = document.new_page(width=595, height=842)
+    mixed_page.insert_textbox(
+        pymupdf.Rect(55, 30, 540, 100),
+        "Figure 1. The flow diagram shows the refund review process.",
+        fontsize=12,
+    )
+    mixed_page.insert_image(pymupdf.Rect(55, 120, 540, 810), stream=image)
+    document_bytes = document.tobytes()
+    document.close()
+    diagram.close()
+    return document_bytes
+
+
+@pytest.mark.skipif(shutil.which("tesseract") is None, reason="Tesseract OCR is not installed")
+def test_uploaded_book_pdf_indexes_scanned_flowchart_and_explains_chapter(clients):
+    first, _ = clients
+    assistant = first.post("/api/assistants", json={"name": "Refund handbook"}).json()
+    upload = first.post(
+        f"/api/assistants/{assistant['id']}/sources/files",
+        files={"file": ("refund-handbook.pdf", _book_pdf_with_scanned_flowchart(), "application/pdf")},
+    )
+    assert upload.status_code == 200, upload.text
+    assert upload.json()["metadata"]["ocr_pages"] == [3, 4]
+
+    source = first.get(f"/api/assistants/{assistant['id']}").json()["sources"][0]
+    assert "Verify customer identity" in source["sections"][-1]["text"]
+    assert "Image text:" in source["sections"][-1]["text"]
+    assert first.patch(
+        f"/api/assistants/{assistant['id']}/sources/{source['id']}", json={"approved": True}
+    ).status_code == 200
+
+    chapter = first.post(f"/api/assistants/{assistant['id']}/answer", json={
+        "question": "Explain Chapter 1 in simple terms.",
+    }).json()
+    assert chapter["grounded"] is True
+    assert "Page 1" in chapter["source_refs"][0]["citation"]
+    assert "30 days" in chapter["answer"]
+    assert "30 days" in chapter["spoken_answer"]
+
+    paraphrased = first.post(f"/api/assistants/{assistant['id']}/answer", json={
+        "question": "How long does a customer have to request a refund?",
+    }).json()
+    assert paraphrased["grounded"] is True
+    assert "30 days" in paraphrased["answer"]
+    assert "Customers may request" in paraphrased["spoken_answer"]
+    assert "Approve and issue refund" not in paraphrased["spoken_answer"]
+
+    diagram_answer = first.post(f"/api/assistants/{assistant['id']}/answer", json={
+        "question": "What steps are shown in the flow diagram?",
+    }).json()
+    assert diagram_answer["grounded"] is True
+    assert "Page 3" in diagram_answer["source_refs"][0]["citation"]
+    assert "Verify customer identity" in diagram_answer["answer"]
+
+
+def test_scanned_pdf_without_tesseract_reports_that_image_text_is_missing(monkeypatch):
+    monkeypatch.setattr(pitch_routes.shutil, "which", lambda _: None)
+    sections, metadata = pitch_routes._extract_pdf(_book_pdf_with_scanned_flowchart())
+
+    assert [section.citation for section in sections] == ["Page 1", "Page 2", "Page 4"]
+    assert not any("Verify customer identity" in section.text for section in sections)
+    assert metadata["image_only_pages"] == [3]
+    assert any("Tesseract is not installed" in warning for warning in metadata["warnings"])
+
+
+def test_private_assistant_uses_opted_in_generation_to_explain_relevant_source(clients, monkeypatch):
+    first, _ = clients
+    monkeypatch.setenv("ANSWER_GENERATION_PROVIDER", "huggingface")
+    monkeypatch.setenv("HUGGINGFACE_API_TOKEN", "test-token")
+    contexts = []
+
+    def explain(question, context):
+        contexts.append((question, context))
+        return "In simple terms, Chapter 1 says refunds are allowed for qualifying purchases within 30 days.", "huggingface"
+
+    monkeypatch.setattr(pitch_routes, "_answer_with_provider", explain)
+    assistant = first.post("/api/assistants", json={"name": "Handbook"}).json()
+    first.post(f"/api/assistants/{assistant['id']}/sources/files", files={
+        "file": (
+            "book.txt",
+            b"Chapter 1: Refunds are available within 30 days.\n\nChapter 2: Requests are reviewed within two business days.",
+            "text/plain",
+        ),
+    })
+    source = first.get(f"/api/assistants/{assistant['id']}").json()["sources"][0]
+    first.patch(f"/api/assistants/{assistant['id']}/sources/{source['id']}", json={"approved": True})
+
+    answer = first.post(f"/api/assistants/{assistant['id']}/answer", json={
+        "question": "Explain Chapter 1 in simple terms.",
+    }).json()
+
+    assert answer["provider"] == "huggingface"
+    assert answer["answer"].startswith("In simple terms")
+    assert contexts and all("Chapter 2" not in excerpt for excerpt in contexts[0][1])
+    assert "Chapter 1" in answer["source_refs"][0]["text"]

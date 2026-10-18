@@ -72,7 +72,7 @@ The API runs at `http://localhost:8000` when launched directly. The repository's
 - `GET /api/pitch/samples` lists the four fictional work scenarios available in the live room.
 - `POST /api/pitch/sample/{sample_id}` loads a bundled sample source using the same document extraction and citation pipeline as a user upload.
 - `POST /api/pitch/document` accepts `{ "document": "..." }`.
-- `POST /api/pitch/file` accepts PPTX, selectable-text PDF, DOCX, plain-text, or Markdown uploads. PPTX text and speaker notes are extracted slide by slide; PDF text is extracted page by page with PyMuPDF; DOCX paragraphs are extracted from OOXML. Legacy `.ppt` files use LibreOffice when it is installed.
+- `POST /api/pitch/file` accepts PPTX, PDF, DOCX, plain-text, or Markdown uploads. PPTX text and speaker notes are extracted slide by slide; PDF text is extracted page by page with PyMuPDF and image text is OCR'd with Tesseract when available; DOCX paragraphs are extracted from OOXML. OCR preserves page citations and warns that diagram arrows and branches need visual review. Legacy `.ppt` files use LibreOffice when it is installed.
 - `POST /api/voice/answer` accepts `{ "question": "..." }` and returns the full grounded `answer`, a concise `spoken_answer` for playback, source chunks, and `source_refs` such as `Slide 4` or `Page 2`. The spoken version uses at most two complete sentences and 280 characters; the full answer and evidence remain visible.
 - `POST /api/pitch/read` returns audio for the loaded pitch. Kokoro, Sarvam, Piper, local Hugging Face, and Hugging Face API output WAV; OpenAI output is MP3.
 - `POST /api/voice/speak` accepts `{ "text": "...", "voice": "alloy" }` and returns audio with the correct `Content-Type`.
@@ -124,10 +124,12 @@ will call the API; the shipped live room uses the same origin. Use a
 non-sensitive demo source because configured providers receive audio and text
 needed to process a voice turn.
 
-Document ingestion is intentionally honest: embedded images, scanned pages, and
-chart-only slides are counted and returned as review warnings. The current
-retrieval path can answer from selectable text, tables, and speaker notes; add
-OCR/vision extraction before claiming that arbitrary visual claims are covered.
+Document ingestion is intentionally honest: scanned PDF pages and image-heavy
+PDF pages are OCR'd when Tesseract is installed, with page citations and a
+warning to verify diagram layout and arrows. If Tesseract is unavailable, the
+source warning identifies image pages that could not be indexed. Embedded
+images in PPTX and DOCX are still counted and returned as review warnings.
+OCR extracts text labels; it does not prove arbitrary visual relationships.
 
 ## Tests
 

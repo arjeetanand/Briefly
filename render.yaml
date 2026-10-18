@@ -3,7 +3,7 @@ services:
     name: pitchvoice-ai
     runtime: python
     plan: free
-    buildCommand: pip install -r backend/requirements.txt
+    buildCommand: apt-get update && apt-get install -y tesseract-ocr && pip install -r backend/requirements.txt
     startCommand: bash render-start.sh
     healthCheckPath: /health
     # Keep deployment settings aligned with the root .env.example. Secrets are

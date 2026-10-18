@@ -12,11 +12,11 @@ Pitchroom AI gives people one place to ask questions about material they already
 
 ## What the prototype does
 
-- Loads PPTX, selectable-text PDF, DOCX, Markdown, and plain-text work material.
+- Loads PPTX, PDF, DOCX, Markdown, and plain-text work material; OCRs scanned PDF pages and image-based PDF diagrams when Tesseract is installed.
 - Preserves slide/page provenance, including PPTX speaker notes, and shows the
   citation beside each grounded answer.
-- Reports image-only slides/pages as review warnings instead of silently
-  pretending that charts or screenshots were understood.
+- Shows recognized image text for review and warns that OCR may miss diagram
+  arrows and branches; embedded DOCX/PPTX images are still warnings only.
 - Retrieves the most relevant source sections for each question.
 - Supports typed questions and one-tap live voice conversations.
 - Runs hands-free turns: speech detected → pause detected → transcription → grounded answer → spoken reply → microphone re-armed.
@@ -30,13 +30,13 @@ The `/` live demo uses shared, fictional sample material stored in memory for th
 
 ## Private assistant studio (pilot)
 
-Open `/studio` to create a private assistant, add multiple supported files or a public website, review extracted passages and warnings, and approve only the sources it may use. Owners can return to saved assistants, rename or delete them, and ask by text or browser voice. Answers show excerpts and clickable website citations; unsupported questions receive an explicit refusal. Website imports stay on the submitted hostname, respect `robots.txt`, and stop at 100 pages, 25 MiB, or 45 seconds. JavaScript-rendered pages, scanned documents, and visual-only claims need separate review. Website refresh is manual.
+Open `/studio` to create a private assistant, add multiple supported files or a public website, review extracted passages and warnings, and approve only the sources it may use. Owners can return to saved assistants, rename or delete them, and ask by text or browser voice. Answers show excerpts and clickable website citations; unsupported questions receive an explicit refusal. Website imports stay on the submitted hostname, respect `robots.txt`, and stop at 100 pages, 25 MiB, or 45 seconds. Scanned PDFs are OCR'd when Tesseract is installed; verify diagram arrows and branches against the original. JavaScript-rendered pages and embedded images in DOCX/PPTX still need separate review. Website refresh is manual.
 
 Assistants remain private until the owner publishes an approved source snapshot. The visitor link can be revoked; changes to sources do not silently alter an existing snapshot. Visitor feedback, unanswered counts, latency, and estimated embedding spend per browser conversation appear in the owner metrics. Cost estimates cover only embedding API tokens and use `OPENAI_EMBEDDING_USD_PER_MILLION_TOKENS`; hosting, browser speech, and other speech-provider charges are excluded.
 
 Local data is stored in `backend/data/pitchroom.sqlite3` by default. Set `PITCHROOM_ACCESS_TOKEN` to require that code for both pilot registrations and the legacy room API. New accounts do not have email verification or password reset yet, so share the invite code only with pilot owners.
 
-Keyword retrieval is local by default. To enable semantic retrieval, set `RETRIEVAL_PROVIDER=openai`, configure `OPENAI_API_KEY`, and make sure the embedding model and per-million-token rate match your provider. Source passages are sent once per content version for cached embeddings; each question is sent for its query embedding. The assistant still composes answers from source text and does not use an answer-generation model. The UI discloses this before questions are sent.
+Keyword retrieval and extractive answers are local by default. To enable semantic retrieval, set `RETRIEVAL_PROVIDER=openai` and configure `OPENAI_API_KEY`; passages are sent once per content version for cached embeddings, and each question is sent for its query embedding. For plain-language explanations, explicitly set `ANSWER_GENERATION_PROVIDER=huggingface` with `HUGGINGFACE_API_TOKEN`; only retrieved excerpts and the question are sent to Hugging Face. These provider choices are disclosed in Studio.
 
 ## Run locally
 
@@ -50,11 +50,14 @@ The Render deployment keeps browser voice and hosted Whisper as separate choices
 python3 -m venv .venv
 .venv/bin/python -m pip install -r backend/requirements-kokoro.txt
 cp .env.example .env
+# macOS: brew install tesseract
+# Debian/Ubuntu: sudo apt-get install tesseract-ocr
 ./run-dev.sh
 ```
 
 The Kokoro requirements are the recommended local install. They include the API,
-local Whisper, and the studio voice. If you only need typed questions or browser
+local Whisper, and the studio voice. Install Tesseract separately to index text
+in scanned PDF pages and diagrams. If you only need typed questions or browser
 speech, install `backend/requirements.txt` instead and set `TTS_PROVIDER=browser`.
 
 Open [http://127.0.0.1:8501](http://127.0.0.1:8501) for the live demo, or visit

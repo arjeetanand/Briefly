@@ -28,6 +28,7 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 from fastapi import APIRouter, File, HTTPException, Request, Response, UploadFile
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 
 from config import setting
 from routes.pitch import (
@@ -834,7 +835,7 @@ async def upload_source(assistant_id: str, request: Request, file: UploadFile = 
         raise HTTPException(415, "Upload a PPTX, PDF, DOCX, text, or Markdown file.")
     raw = await _read_limited_document_upload(file, _document_upload_limit())
     try:
-        sections, metadata = _extract_document(raw, filename, content_type)
+        sections, metadata = await run_in_threadpool(_extract_document, raw, filename, content_type)
         if not sections and not metadata.get("warnings"):
             raise ValueError("No readable text was found in this file.")
     except (ValueError, zipfile.BadZipFile) as exc:
@@ -915,7 +916,7 @@ def _answer(assistant: DocumentStore, payload: AskRequest, db: sqlite3.Connectio
         retrieval_mode = "keyword-fallback"
     result = _answer_question_from_store(
         QuestionRequest(question=retrieval_question), assistant,
-        allow_generation=False, semantic_scores=semantic_scores or None,
+        allow_generation=True, semantic_scores=semantic_scores or None,
     )
     if follow_up and result["grounded"]:
         follow_up_terms = _token_set(question)
