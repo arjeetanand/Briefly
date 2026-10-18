@@ -12,12 +12,12 @@ import { fileURLToPath } from "node:url";
 const root = fileURLToPath(new URL("..", import.meta.url));
 const chrome = process.env.CHROME_PATH || "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 
-async function freePort() {
-  const server = createServer();
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const port = server.address().port;
-  await new Promise((resolve) => server.close(resolve));
-  return port;
+async function freePorts(count) {
+  const servers = Array.from({ length: count }, () => createServer());
+  await Promise.all(servers.map((server) => new Promise((resolve) => server.listen(0, "127.0.0.1", resolve))));
+  const ports = servers.map((server) => server.address().port);
+  await Promise.all(servers.map((server) => new Promise((resolve) => server.close(resolve))));
+  return ports;
 }
 
 async function until(check, timeout = 10000) {
@@ -53,8 +53,7 @@ function silentWav() {
 }
 
 test("typed evidence and a full voice turn in Chrome", { timeout: 90000 }, async () => {
-  const appPort = await freePort();
-  const debugPort = await freePort();
+  const [appPort, debugPort] = await freePorts(2);
   const profile = await mkdtemp(join(tmpdir(), "pitchroom-e2e-"));
   const sourcePath = join(profile, "returns.txt");
   await writeFile(sourcePath, "Refunds are accepted for 30 days after purchase. Contact support@example.com for help.\n");
@@ -115,6 +114,8 @@ test("typed evidence and a full voice turn in Chrome", { timeout: 90000 }, async
     await call("Fetch.enable", { patterns: [
       { urlPattern: "*/api/voice/transcribe", requestStage: "Request" },
       { urlPattern: "*/api/voice/speak", requestStage: "Request" },
+      { urlPattern: "*/api/assistants/*/answers/*/speech", requestStage: "Request" },
+      { urlPattern: "*/api/shared/*/answers/*/speech", requestStage: "Request" },
     ] });
     await call("Page.addScriptToEvaluateOnNewDocument", { source: `
       window.__phases = [];
@@ -223,6 +224,10 @@ test("typed evidence and a full voice turn in Chrome", { timeout: 90000 }, async
     await evaluate("document.querySelector('#question-input').value = 'How many days are refunds accepted?'; document.querySelector('#question-form').requestSubmit()");
     await until(() => evaluate("document.querySelector('#conversation .message-answer')?.textContent.includes('30 days')"));
     assert.match(await evaluate("document.querySelector('#conversation .evidence-label').textContent"), /Document section/);
+    await until(() => evaluate("document.querySelector('#conversation .answer-feedback button')?.textContent === 'Play again'"));
+    await evaluate("document.querySelector('#conversation .answer-feedback button').click()");
+    await until(() => evaluate("document.querySelector('#conversation .answer-feedback button')?.textContent === 'Play again'"));
+    assert.equal(speeches, 2);
 
     await evaluate("document.querySelector('#publish-assistant').click()");
     await until(() => evaluate("!document.querySelector('#publish-status').hidden"));
@@ -231,6 +236,8 @@ test("typed evidence and a full voice turn in Chrome", { timeout: 90000 }, async
     await until(() => evaluate("!document.querySelector('#shared-workspace').hidden && document.querySelector('#shared-name').textContent.length > 0"));
     await evaluate("document.querySelector('#shared-question-input').value = 'How many days are refunds accepted?'; document.querySelector('#shared-question-form').requestSubmit()");
     await until(() => evaluate("document.querySelector('#shared-conversation .message-answer')?.textContent.includes('30 days')"));
+    await until(() => evaluate("document.querySelector('#shared-conversation .answer-feedback button')?.textContent === 'Play again'"));
+    assert.equal(speeches, 3);
     assert.deepEqual(errors, []);
   } finally {
     ws?.close();

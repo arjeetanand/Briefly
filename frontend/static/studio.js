@@ -1,5 +1,5 @@
 const $ = (selector) => document.querySelector(selector);
-const state = { mode: "login", assistants: [], active: null, shareToken: "", history: [], shareUrl: "", sessionId: "" };
+const state = { mode: "login", assistants: [], active: null, shareToken: "", history: [], shareUrl: "", sessionId: "", speechAudio: null, speechUrl: "", speechCancel: null, speechAbort: null };
 
 async function api(path, options = {}) {
   const response = await fetch(path, { credentials: "same-origin", ...options,
@@ -13,6 +13,38 @@ async function api(path, options = {}) {
 function message(element, text, good = false) {
   element.textContent = text;
   element.classList.toggle("is-good", good);
+}
+
+function stopSpeech() {
+  const finish = state.speechCancel;
+  const audio = state.speechAudio;
+  const url = state.speechUrl;
+  state.speechCancel = null;
+  state.speechAudio = null;
+  state.speechUrl = "";
+  state.speechAbort?.abort();
+  state.speechAbort = null;
+  finish?.(new DOMException("Speech playback was cancelled.", "AbortError"));
+  window.speechSynthesis?.cancel();
+  if (audio) { audio.pause(); audio.removeAttribute("src"); audio.load(); }
+  if (url) URL.revokeObjectURL(url);
+}
+
+function setVoiceDisclosure(provider) {
+  const voice = provider === "kokoro" ? "Kokoro’s local English voice"
+    : provider === "browser" ? "your browser’s voice" : "the selected speech provider";
+  document.querySelectorAll(".voice-disclosure").forEach((element) => {
+    element.textContent = `Voice questions use your browser’s speech recognition. Spoken replies use ${voice}. Pitchroom does not retain microphone recordings.`;
+  });
+}
+
+async function warmVoice(path, statusId) {
+  try {
+    const result = await api(path, { method: "POST" });
+    setVoiceDisclosure(result.provider);
+  } catch (error) {
+    message($(statusId), `Spoken replies are not ready: ${error.message}. The written answers are still available.`);
+  }
 }
 
 function savedShareUrl(id) {
@@ -184,6 +216,7 @@ async function openAssistant(id) {
   $("#publish-assistant").classList.toggle("is-stale", assistant.published_stale);
   setSharePanel(assistant);
   await refreshMetrics();
+  void warmVoice(`/api/assistants/${assistant.id}/voice/warm`, "#question-message");
 }
 
 async function refreshAssistant() { await loadAssistants(state.active.id); }
@@ -222,21 +255,100 @@ function renderSources(container, result) {
   if (refs.length) container.append(evidence);
 }
 
-function speak(text) {
-  if (!("speechSynthesis" in window) || !text) return;
-  window.speechSynthesis.cancel();
-  const utterance = new SpeechSynthesisUtterance(text);
-  utterance.rate = 1.02;
-  window.speechSynthesis.speak(utterance);
+function browserSpeak(text) {
+  if (!("speechSynthesis" in window) || !window.SpeechSynthesisUtterance) {
+    throw new Error("This browser does not provide a local speech voice.");
+  }
+  return new Promise((resolve, reject) => {
+    let finished = false;
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = 0.98;
+    const finish = (error) => {
+      if (finished) return;
+      finished = true;
+      if (state.speechCancel === cancel) state.speechCancel = null;
+      if (error) reject(error); else resolve();
+    };
+    const cancel = () => finish(new DOMException("Speech playback was cancelled.", "AbortError"));
+    state.speechCancel = cancel;
+    utterance.onend = () => finish();
+    utterance.onerror = () => finish(new Error("The browser voice could not speak this answer."));
+    window.speechSynthesis.speak(utterance);
+  });
 }
 
-function appendAnswer(container, result, onFeedback) {
+async function speak(text, answerId, shared) {
+  stopSpeech();
+  const controller = new AbortController();
+  state.speechAbort = controller;
+  const base = shared ? `/api/shared/${encodeURIComponent(state.shareToken)}` : `/api/assistants/${state.active.id}`;
+  try {
+    const response = await fetch(`${base}/answers/${encodeURIComponent(answerId)}/speech`, {
+      method: "POST", credentials: "same-origin", signal: controller.signal,
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }),
+    });
+    if (response.status === 409) return await browserSpeak(text);
+    if (!response.ok) {
+      let body = {};
+      try { body = await response.json(); } catch (_) { /* keep the HTTP status fallback */ }
+      throw new Error(body.detail || `Speech request failed (${response.status}).`);
+    }
+    const url = URL.createObjectURL(await response.blob());
+    const audio = new Audio(url);
+    state.speechAudio = audio;
+    state.speechUrl = url;
+    await new Promise((resolve, reject) => {
+      let finished = false;
+      const finish = (error) => {
+        if (finished) return;
+        finished = true;
+        if (state.speechAudio === audio) {
+          state.speechAudio = null;
+          state.speechUrl = "";
+          URL.revokeObjectURL(url);
+        }
+        if (state.speechCancel === cancel) state.speechCancel = null;
+        if (error) reject(error); else resolve();
+      };
+      const cancel = () => finish(new DOMException("Speech playback was cancelled.", "AbortError"));
+      state.speechCancel = cancel;
+      audio.addEventListener("ended", () => finish(), { once: true });
+      audio.addEventListener("error", () => finish(new Error("The server voice returned audio that this browser could not play.")), { once: true });
+      audio.play().catch((error) => finish(new Error(`Audio playback could not start: ${error.message}`)));
+    });
+  } finally {
+    if (state.speechAbort === controller) state.speechAbort = null;
+  }
+}
+
+function appendAnswer(container, result, onFeedback, shared, status) {
   const answer = document.createElement("div");
   answer.className = "message message-answer";
   answer.append(document.createTextNode(result.answer || "I could not find that in the approved sources."));
   renderSources(answer, result);
   const feedback = document.createElement("div");
   feedback.className = "answer-feedback";
+  if (result.grounded) {
+    const listen = document.createElement("button");
+    listen.type = "button";
+    listen.textContent = "Play answer";
+    listen.setAttribute("aria-label", "Play spoken answer");
+    const play = async () => {
+      listen.disabled = true;
+      listen.textContent = "Preparing voice…";
+      try {
+        await speak(result.spoken_answer || result.answer, result.answer_id, shared);
+        listen.textContent = "Play again";
+      } catch (error) {
+        if (error.name === "AbortError") { listen.textContent = "Play answer"; return; }
+        listen.textContent = "Try voice again";
+        message($(status), `The answer is ready, but voice playback failed: ${error.message}`);
+      } finally { listen.disabled = false; }
+    };
+    listen.addEventListener("click", () => { void play(); });
+    feedback.append(listen);
+    void play();
+  }
   for (const [rating, label] of [[1, "Helpful"], [-1, "Not helpful"]]) {
     const button = document.createElement("button");
     button.type = "button";
@@ -247,7 +359,6 @@ function appendAnswer(container, result, onFeedback) {
   answer.append(feedback);
   container.append(answer);
   container.scrollTop = container.scrollHeight;
-  if (result.grounded) speak(result.answer);
 }
 
 async function ask(question, options = {}) {
@@ -277,7 +388,7 @@ async function ask(question, options = {}) {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ answer_id: answerId, rating }),
       }); button.textContent = "Thanks"; button.disabled = true; if (!shared) await refreshMetrics(); }
       catch (error) { message(status, error.message); }
-    });
+    }, shared, shared ? "#shared-message" : "#question-message");
     status.textContent = "";
     if (!shared) await refreshMetrics();
   } catch (error) { message(status, error.message); }
@@ -297,7 +408,7 @@ function bindVoice(buttonId, inputId, formId, statusId) {
     button.disabled = true;
     button.setAttribute("aria-pressed", "true");
     message($(statusId), "Listening… speak your question.");
-    window.speechSynthesis?.cancel();
+    stopSpeech();
     recognition.onresult = (event) => {
       $(inputId).value = event.results[0][0].transcript;
       $(formId).requestSubmit();
@@ -321,9 +432,6 @@ async function initializeShared() {
   try {
     const data = await api(`/api/shared/${encodeURIComponent(state.shareToken)}`);
     $("#shared-name").textContent = data.name;
-    if (data.retrieval_provider === "openai") {
-      $("#shared-question-form .voice-disclosure").textContent = "Semantic search is enabled. Approved passages and your question are sent to OpenAI for embeddings.";
-    }
     $("#shared-sources").replaceChildren(...data.sources.map((source) => {
       const pill = document.createElement("span"); pill.className = "shared-source-pill";
       const name = source.url ? document.createElement("a") : document.createElement("span");
@@ -331,6 +439,10 @@ async function initializeShared() {
       if (source.url) { name.href = source.url; name.target = "_blank"; name.rel = "noopener noreferrer"; }
       pill.append(name); return pill;
     }));
+    await warmVoice(`/api/shared/${encodeURIComponent(state.shareToken)}/voice/warm`, "#shared-message");
+    if (data.retrieval_provider === "openai") {
+      $("#shared-question-form .voice-disclosure").textContent += " Semantic search also sends approved passages and your question to OpenAI for embeddings.";
+    }
   } catch (error) { $("#shared-name").textContent = "This assistant link is unavailable."; message($("#shared-message"), error.message); $("#shared-question-form").hidden = true; }
 }
 

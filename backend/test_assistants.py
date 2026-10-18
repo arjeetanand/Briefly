@@ -74,6 +74,71 @@ def test_private_assistants_approve_sources_and_isolate_owners(clients):
     assert wrong_owner.status_code == 404
 
 
+def test_kokoro_speech_is_limited_to_grounded_owner_and_published_answers(clients, monkeypatch):
+    first, second = clients
+    assistant = first.post("/api/assistants", json={"name": "Customer guide"}).json()
+    path = f"/api/assistants/{assistant['id']}"
+    first.post(f"{path}/sources/files", files={
+        "file": ("faq.txt", b"Customers can request a refund within 30 days.", "text/plain"),
+    })
+    source = first.get(path).json()["sources"][0]
+    first.patch(f"{path}/sources/{source['id']}", json={"approved": True})
+    warmed = []
+    generated = []
+    monkeypatch.setattr(assistants, "_speech_provider", lambda: "kokoro")
+    monkeypatch.setattr(assistants, "_warm_kokoro_voice", lambda: warmed.append(True) or True)
+    monkeypatch.setattr(assistants, "_speech_audio", lambda text: (generated.append(text) or b"kokoro-wav", "audio/wav"))
+
+    assert first.post(f"{path}/voice/warm").json() == {"provider": "kokoro", "warmed": True}
+    assert second.post(f"{path}/voice/warm").status_code == 404
+    answer = first.post(f"{path}/answer", json={
+        "question": "How long do customers have to request a refund?",
+    }).json()
+    speech_path = f"{path}/answers/{answer['answer_id']}/speech"
+    speech = first.post(speech_path, json={"text": answer["spoken_answer"]})
+    assert speech.status_code == 200
+    assert speech.headers["content-type"] == "audio/wav"
+    assert speech.content == b"kokoro-wav"
+    assert generated == [answer["spoken_answer"]]
+    assert second.post(speech_path, json={"text": answer["spoken_answer"]}).status_code == 404
+    assert first.post(speech_path, json={"text": "x" * (assistants.MAX_SPOKEN_REPLY_CHARS + 1)}).status_code == 422
+    monkeypatch.setattr(assistants, "_speech_provider", lambda: "browser")
+    assert first.post(speech_path, json={"text": answer["spoken_answer"]}).status_code == 409
+    monkeypatch.setattr(assistants, "_speech_provider", lambda: "kokoro")
+
+    unsupported = first.post(f"{path}/answer", json={"question": "What is the product's launch date?"}).json()
+    blocked = first.post(f"{path}/answers/{unsupported['answer_id']}/speech", json={"text": "The launch is tomorrow."})
+    assert blocked.status_code == 404
+    assert len(generated) == 1
+
+    token = first.post(f"{path}/publish").json()["url"].split("/")[-1]
+    assert first.post(f"/api/shared/{token}/voice/warm").json() == {"provider": "kokoro", "warmed": True}
+    shared_answer = first.post(f"/api/shared/{token}/answer", json={
+        "question": "How long do customers have to request a refund?",
+    }).json()
+    shared_path = f"/api/shared/{token}/answers/{shared_answer['answer_id']}/speech"
+    shared_speech = first.post(shared_path, json={"text": shared_answer["spoken_answer"]})
+    assert shared_speech.status_code == 200
+    assert generated[-1] == shared_answer["spoken_answer"]
+    first.delete(f"{path}/publish")
+    assert first.post(shared_path, json={"text": shared_answer["spoken_answer"]}).status_code == 404
+
+
+def test_speech_budget_is_per_assistant_and_expires(monkeypatch):
+    assistant_id = "speech-budget-test"
+    now = [1000.0]
+    assistants._speech_starts.pop(assistant_id, None)
+    monkeypatch.setattr(assistants.time, "monotonic", lambda: now[0])
+    for _ in range(assistants.MAX_ASSISTANT_SPEECH_PER_MINUTE):
+        assert assistants._take_speech_budget(assistant_id)
+    assert not assistants._take_speech_budget(assistant_id)
+    assert assistants._take_speech_budget("another-assistant")
+    now[0] += 60
+    assert assistants._take_speech_budget(assistant_id)
+    assistants._speech_starts.pop(assistant_id, None)
+    assistants._speech_starts.pop("another-assistant", None)
+
+
 def test_deleting_assistant_removes_its_sources_and_public_link(clients):
     first, _ = clients
     assistant = first.post("/api/assistants", json={"name": "Temporary guide"}).json()

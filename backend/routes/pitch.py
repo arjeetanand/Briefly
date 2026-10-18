@@ -83,6 +83,8 @@ KOKORO_SAMPLE_RATE = 24_000
 KOKORO_MODEL_REPO = "hexgrad/Kokoro-82M"
 MAX_KOKORO_TEXT_CHARS = 1_200
 MAX_SPOKEN_ANSWER_CHARS = 1_000
+MAX_SPOKEN_REPLY_CHARS = 280
+MAX_SPOKEN_REPLY_SENTENCES = 2
 KOKORO_WARMUP_TEXT = "Pitchroom is ready to answer the next presentation question clearly."
 DOCUMENT_EXTENSIONS = {
     ".docx",
@@ -735,6 +737,24 @@ def _bounded_spoken_answer(answer: str) -> str:
     return "The matching source passage is too long to read aloud in one reply. Please ask a more focused question."
 
 
+def _concise_spoken_reply(answer: str) -> str:
+    """Read only a short, complete excerpt; the full answer and evidence stay visible."""
+    normalized = re.sub(r"\s+", " ", answer).strip()
+    normalized = re.sub(r"^According to the approved source:\s*", "", normalized, flags=re.IGNORECASE)
+    sentences = [sentence.strip() for sentence in re.split(r"(?<=[.!?])\s+", normalized) if sentence.strip()]
+    selected: list[str] = []
+    selected_length = 0
+    for sentence in sentences:
+        candidate_length = selected_length + len(sentence) + (1 if selected else 0)
+        if len(selected) >= MAX_SPOKEN_REPLY_SENTENCES or candidate_length > MAX_SPOKEN_REPLY_CHARS:
+            break
+        selected.append(sentence)
+        selected_length = candidate_length
+    if selected:
+        return " ".join(selected)
+    return "The source passage is long. I've shown it on screen; ask a more specific question and I'll read a shorter answer."
+
+
 def _openai_audio(text: str, voice: str) -> bytes:
     url = _setting("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/") + "/audio/speech"
     request = urllib.request.Request(
@@ -1353,6 +1373,7 @@ def _answer_question_from_store(
     return {
         "question": request.question,
         "answer": answer,
+        "spoken_answer": _concise_spoken_reply(answer),
         "grounded": bool(context),
         "provider": provider,
         "sources": context,
@@ -1416,7 +1437,7 @@ def warm_voice() -> dict[str, Any]:
     try:
         warmed = _warm_kokoro_voice()
     except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise HTTPException(status_code=503, detail=str(exc), headers={"X-Speech-Provider": "kokoro"}) from exc
     return {"provider": "kokoro", "warmed": warmed, "ready": True}
 
 

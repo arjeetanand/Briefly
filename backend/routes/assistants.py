@@ -22,6 +22,7 @@ from collections import deque
 from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
 from pathlib import Path
+from threading import Lock
 from typing import Literal
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
@@ -33,6 +34,7 @@ from routes.pitch import (
     BACKEND_DIR,
     DOCUMENT_EXTENSIONS,
     DOCUMENT_TYPES,
+    MAX_SPOKEN_REPLY_CHARS,
     DocumentStore,
     QuestionRequest,
     SourceSection,
@@ -42,6 +44,9 @@ from routes.pitch import (
     _text_sections,
     _token_set,
     _token_stem,
+    _speech_audio,
+    _speech_provider,
+    _warm_kokoro_voice,
     _read_limited_document_upload,
     _document_upload_limit,
 )
@@ -58,7 +63,11 @@ MAX_SITE_SECONDS = 45
 MAX_ASSISTANT_SOURCES = 100
 MAX_ASSISTANT_BYTES = 50 * 1024 * 1024
 MAX_ASSISTANT_ANSWERS_PER_MINUTE = 60
+MAX_ASSISTANT_SPEECH_PER_MINUTE = 12
 USER_AGENT = "PitchroomBot/1.0 (+public-page knowledge import)"
+# shortcut: process-local cap, replace with shared storage before multi-worker deployment.
+_speech_budget_lock = Lock()
+_speech_starts: dict[str, deque[float]] = {}
 
 
 class _Connection(sqlite3.Connection):
@@ -214,6 +223,18 @@ def _answer_budget(db: sqlite3.Connection, assistant_id: str) -> None:
     count = db.execute("SELECT COUNT(*) FROM answers WHERE assistant_id=? AND created_at>=?", (assistant_id, cutoff)).fetchone()[0]
     if count >= MAX_ASSISTANT_ANSWERS_PER_MINUTE:
         raise HTTPException(429, "This assistant has reached its 60-question-per-minute pilot limit. Try again shortly.")
+
+
+def _take_speech_budget(assistant_id: str) -> bool:
+    now = time.monotonic()
+    with _speech_budget_lock:
+        starts = _speech_starts.setdefault(assistant_id, deque())
+        while starts and now - starts[0] >= 60:
+            starts.popleft()
+        if len(starts) >= MAX_ASSISTANT_SPEECH_PER_MINUTE:
+            return False
+        starts.append(now)
+        return True
 
 
 def _source_payload(row: sqlite3.Row) -> dict:
@@ -645,6 +666,10 @@ class AskRequest(BaseModel):
     session_id: str = Field(default="", max_length=64)
 
 
+class AnswerSpeechRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=MAX_SPOKEN_REPLY_CHARS)
+
+
 class FeedbackRequest(BaseModel):
     answer_id: str
     rating: int = Field(ge=-1, le=1)
@@ -878,6 +903,56 @@ def answer_owner(assistant_id: str, payload: AskRequest, request: Request) -> di
     return result
 
 
+def _warm_voice() -> dict:
+    provider = _speech_provider()
+    if provider != "kokoro":
+        return {"provider": provider, "warmed": False}
+    try:
+        warmed = _warm_kokoro_voice()
+    except RuntimeError as exc:
+        raise HTTPException(503, str(exc)) from exc
+    return {"provider": provider, "warmed": warmed}
+
+
+def _answer_for_speech(db: sqlite3.Connection, assistant_id: str, answer_id: str) -> None:
+    answer = db.execute(
+        "SELECT grounded FROM answers WHERE id=? AND assistant_id=?", (answer_id, assistant_id)
+    ).fetchone()
+    if not answer or not answer["grounded"]:
+        raise HTTPException(404, "Speech is available only for a grounded answer.")
+
+
+def _speech_response(text: str, assistant_id: str) -> Response:
+    if _speech_provider() == "browser":
+        raise HTTPException(409, "Browser speech is selected for this instance.")
+    if not _take_speech_budget(assistant_id):
+        raise HTTPException(429, "This assistant has reached its spoken-reply limit. Try again shortly.")
+    try:
+        audio, media_type = _speech_audio(text)
+    except RuntimeError as exc:
+        raise HTTPException(503, str(exc)) from exc
+    return Response(content=audio, media_type=media_type)
+
+
+@router.post("/api/assistants/{assistant_id}/voice/warm")
+def warm_owner_voice(assistant_id: str, request: Request) -> dict:
+    user_id = _user_id(request)
+    with _connect() as db:
+        _assistant(db, assistant_id, user_id)
+    return _warm_voice()
+
+
+@router.post("/api/assistants/{assistant_id}/answers/{answer_id}/speech")
+def speak_owner_answer(
+    assistant_id: str, answer_id: str, payload: AnswerSpeechRequest, request: Request
+) -> Response:
+    user_id = _user_id(request)
+    with _connect() as db:
+        _assistant(db, assistant_id, user_id)
+        _answer_for_speech(db, assistant_id, answer_id)
+    return _speech_response(payload.text, assistant_id)
+
+
 @router.post("/api/assistants/{assistant_id}/feedback")
 def answer_feedback(assistant_id: str, payload: FeedbackRequest, request: Request) -> dict:
     user_id = _user_id(request)
@@ -954,6 +1029,12 @@ def shared_assistant(share_token: str) -> dict:
     ]}
 
 
+@router.post("/api/shared/{share_token}/voice/warm")
+def warm_shared_voice(share_token: str) -> dict:
+    _published(share_token)
+    return _warm_voice()
+
+
 @router.post("/api/shared/{share_token}/answer")
 def shared_answer(share_token: str, payload: AskRequest) -> dict:
     _, snapshot = _published(share_token)
@@ -963,6 +1044,16 @@ def shared_answer(share_token: str, payload: AskRequest) -> dict:
         db.execute("INSERT INTO answers(id,assistant_id,grounded,latency_ms,created_at,retrieval_method,embedding_tokens,session_id,estimated_cost_usd) VALUES(?,?,?,?,?,?,?,?,?)",
                    (result["answer_id"], snapshot["assistant_id"], int(result["grounded"]), result["latency_ms"], _now(), result["retrieval_mode"], result["embedding_tokens"], payload.session_id[:64] or result["answer_id"], result["estimated_cost_usd"]))
     return result
+
+
+@router.post("/api/shared/{share_token}/answers/{answer_id}/speech")
+def speak_shared_answer(
+    share_token: str, answer_id: str, payload: AnswerSpeechRequest
+) -> Response:
+    _, snapshot = _published(share_token)
+    with _connect() as db:
+        _answer_for_speech(db, snapshot["assistant_id"], answer_id)
+    return _speech_response(payload.text, snapshot["assistant_id"])
 
 
 @router.post("/api/shared/{share_token}/feedback")

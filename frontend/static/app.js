@@ -87,6 +87,7 @@ const state = {
   bargeInArmed: false,
   turnEpoch: 0,
   lastAnswer: "",
+  lastSpokenAnswer: "",
   pendingAbort: null,
   typedAbort: null,
   sourceSwitching: false,
@@ -260,6 +261,7 @@ async function apiFetch(path, options = {}) {
 
 function setAnswerPlaceholder() {
   state.lastAnswer = "";
+  state.lastSpokenAnswer = "";
   elements.answer.textContent = "Pitchroom will answer only when it finds matching approved-source evidence.";
   elements.answer.classList.add("placeholder");
   elements.groundingBadge.textContent = "Waiting for a question";
@@ -287,6 +289,7 @@ function setHeard(question) {
 
 function renderAnswer(answerData) {
   state.lastAnswer = answerData.answer || "";
+  state.lastSpokenAnswer = answerData.spoken_answer || state.lastAnswer;
   elements.answer.textContent = state.lastAnswer || "I could not find that in the pitch document.";
   elements.answer.classList.remove("placeholder");
   const grounded = Boolean(answerData.grounded);
@@ -880,11 +883,13 @@ function warmSpeechProvider() {
     .then(async (response) => {
       let readiness = {};
       try { readiness = await response.json(); } catch (_) { /* retain fallback below */ }
+      state.speechProvider = readiness.provider || response.headers.get("X-Speech-Provider") || null;
       if (!response.ok) {
-        setVoiceReadiness("Studio voice unavailable — browser voice will take over.", "fallback");
+        setVoiceReadiness(state.speechProvider === "kokoro"
+          ? "Kokoro voice unavailable"
+          : "Studio voice unavailable — browser voice will take over.", "fallback");
         return false;
       }
-      state.speechProvider = readiness.provider || null;
       if (readiness.provider === "kokoro" && readiness.ready) {
         setVoiceReadiness("Studio voice ready · local English", "ready");
         return true;
@@ -976,6 +981,11 @@ async function playAnswer(text, resumeWhenFinished, signal) {
   } catch (error) {
     if (error?.name === "AbortError" || signal?.aborted) throw error;
     const serverMessage = error?.message || "The server speech provider is unavailable.";
+    if (state.speechProvider === "kokoro") {
+      elements.liveAnnouncement.textContent = "Kokoro voice is unavailable. The grounded answer is still shown on screen.";
+      setVoiceReadiness("Kokoro voice unavailable", "fallback");
+      throw new Error(`Kokoro playback failed: ${serverMessage}`);
+    }
     elements.liveAnnouncement.textContent = "Server voice unavailable. Switching to the free browser voice.";
     setVoiceReadiness("Browser voice fallback active", "fallback");
     try {
@@ -1044,7 +1054,7 @@ async function processVoiceTurn(blob, sessionId, turnEpoch) {
       // Start retaining a possible interruption before the server finishes
       // buffering the WAV. This closes the otherwise lost sub-second gap.
       armBargeCapture();
-      await playAnswer(answerData.answer, true, controller.signal);
+      await playAnswer(answerData.spoken_answer || answerData.answer, true, controller.signal);
     } catch (speechError) {
       if (!state.active || sessionId !== state.sessionId || turnEpoch !== state.turnEpoch) return;
       showError(`The grounded answer is ready, but voice playback is unavailable: ${speechError.message}`, true);
@@ -1138,7 +1148,7 @@ async function manuallyPlayAnswer() {
       state.pendingAbort = manualController;
     }
     if (state.active) armBargeCapture();
-    await playAnswer(state.lastAnswer, state.active, manualController?.signal);
+    await playAnswer(state.lastSpokenAnswer || state.lastAnswer, state.active, manualController?.signal);
     if (manualController?.signal.aborted || manualTurnEpoch !== state.turnEpoch) return;
   } catch (error) {
     if (error?.name === "AbortError" || (manualTurnEpoch !== null && manualTurnEpoch !== state.turnEpoch)) return;

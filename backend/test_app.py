@@ -69,6 +69,35 @@ def test_answer_stays_within_the_live_studio_voice_budget(monkeypatch) -> None:
     assert len(answer) <= pitch_routes.MAX_SPOKEN_ANSWER_CHARS
     assert answer.endswith(".")
     assert "Pitchroom evidence supports founders" in answer
+    assert "ask a more specific question" in response.json()["spoken_answer"]
+
+
+def test_live_voice_reads_a_concise_complete_answer_and_keeps_full_evidence_visible(monkeypatch) -> None:
+    monkeypatch.setenv("ANSWER_GENERATION_PROVIDER", "extractive")
+    client.post(
+        "/api/pitch/document",
+        json={
+            "document": (
+                "The website review is due Friday. The design review is due Monday. "
+                "The launch review is due Tuesday. The security review is due Thursday."
+            )
+        },
+    )
+
+    response = client.post(
+        "/api/voice/answer",
+        json={"question": "When is the review due?"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert "The launch review is due Tuesday" in data["answer"]
+    assert any("The launch review is due Tuesday" in source for source in data["sources"])
+    assert "The launch review is due Tuesday" not in data["spoken_answer"]
+    assert not data["spoken_answer"].startswith("According to the approved source")
+    assert data["spoken_answer"].endswith(".")
+    assert len(data["spoken_answer"]) <= pitch_routes.MAX_SPOKEN_REPLY_CHARS
+    assert len(pitch_routes._sentence_parts(data["spoken_answer"])) <= pitch_routes.MAX_SPOKEN_REPLY_SENTENCES
 
 
 def test_answer_declines_unknown_fact_when_the_subject_name_repeats() -> None:
@@ -482,6 +511,21 @@ def test_kokoro_warm_route_preloads_only_the_selected_local_voice(monkeypatch) -
     assert response.status_code == 200
     assert response.json() == {"provider": "kokoro", "warmed": True, "ready": True}
     assert warmed == [True]
+
+
+def test_kokoro_warm_failure_keeps_the_selected_provider_visible(monkeypatch) -> None:
+    monkeypatch.setenv("TTS_PROVIDER", "kokoro")
+    monkeypatch.setattr(
+        pitch_routes,
+        "_warm_kokoro_voice",
+        lambda: (_ for _ in ()).throw(RuntimeError("Kokoro model is unavailable.")),
+    )
+
+    response = client.post("/api/voice/warm")
+
+    assert response.status_code == 503
+    assert response.headers["x-speech-provider"] == "kokoro"
+    assert response.json()["detail"] == "Kokoro model is unavailable."
 
 
 def test_kokoro_warmup_synthesizes_once_per_resolved_configuration(monkeypatch) -> None:

@@ -8,7 +8,9 @@ The `/studio` interface adds private, owner-scoped assistants alongside the
 legacy shared rehearsal room. Owners can save assistants, upload supported
 documents, import same-domain public website pages, review and approve sources,
 ask with text or browser voice, and optionally publish a revocable link to an
-immutable source snapshot. `backend/routes/assistants.py` owns the SQLite
+immutable source snapshot. Grounded replies use the instance's configured
+speech provider, including the same Kokoro voice as the live room when selected;
+each answer also has a replay control. `backend/routes/assistants.py` owns the SQLite
 accounts, sessions, source versions, visitor links, feedback, and usage metrics.
 
 `PITCHROOM_DATABASE_PATH` defaults to `backend/data/pitchroom.sqlite3`.
@@ -37,6 +39,14 @@ Assistant API routes:
   Q&A and pilot signals. `POST /publish` creates a visitor snapshot and
   `DELETE /publish` revokes its link.
 - `/api/shared/{token}` serves the visitor snapshot and its Q&A/feedback routes.
+- `/api/assistants/{id}/voice/warm` and `/api/shared/{token}/voice/warm` warm
+  the selected provider within the owner's or published-link access boundary.
+- `/api/assistants/{id}/answers/{answer_id}/speech` and the corresponding
+  `/api/shared/{token}/answers/{answer_id}/speech` route speak only grounded
+  answers, with a 280-character limit and 12 spoken replies per assistant per
+  minute. If `TTS_PROVIDER=browser`, the routes
+  return `409` so the client uses the browser voice; configured server-provider
+  failures remain visible instead of silently switching narrators.
 
 ## Run locally
 
@@ -63,7 +73,7 @@ The API runs at `http://localhost:8000` when launched directly. The repository's
 - `POST /api/pitch/sample/{sample_id}` loads a bundled practice deck using the same PowerPoint text and citation extractor as a user upload.
 - `POST /api/pitch/document` accepts `{ "document": "..." }`.
 - `POST /api/pitch/file` accepts PPTX, selectable-text PDF, DOCX, plain-text, or Markdown uploads. PPTX text and speaker notes are extracted slide by slide; PDF text is extracted page by page with PyMuPDF; DOCX paragraphs are extracted from OOXML. Legacy `.ppt` files use LibreOffice when it is installed.
-- `POST /api/voice/answer` accepts `{ "question": "..." }` and returns a grounded answer, source chunks, and `source_refs` such as `Slide 4` or `Page 2`. The frontend can send speech-to-text output here.
+- `POST /api/voice/answer` accepts `{ "question": "..." }` and returns the full grounded `answer`, a concise `spoken_answer` for playback, source chunks, and `source_refs` such as `Slide 4` or `Page 2`. The spoken version uses at most two complete sentences and 280 characters; the full answer and evidence remain visible.
 - `POST /api/pitch/read` returns audio for the loaded pitch. Kokoro, Sarvam, Piper, local Hugging Face, and Hugging Face API output WAV; OpenAI output is MP3.
 - `POST /api/voice/speak` accepts `{ "text": "...", "voice": "alloy" }` and returns audio with the correct `Content-Type`.
 - `POST /api/voice/warm` warms the explicitly selected local Kokoro voice without invoking any hosted provider. The browser room calls this on load.
@@ -90,7 +100,7 @@ KOKORO_SPEED=0.98
 KOKORO_DEVICE=auto
 ```
 
-The page asks `/api/voice/warm` to load the model and a short test phrase as soon as it opens, and repeated page loads return immediately once that server process is warm. The initial artifact download contacts Hugging Face but does not contain answer text; pre-cache it before an offline presentation. Wait for that first load (roughly 360 MB is cached locally), then run one text question and select **Play answer** before presenting. `af_bella` is the practical alternate narrator to audition. The answer path retains complete sentences up to 1,000 characters; synthesis keeps a separate 1,200-character hard guard. The browser buffers one WAV response rather than word-by-word streaming.
+The page asks `/api/voice/warm` to load the model and a short test phrase as soon as it opens, and repeated page loads return immediately once that server process is warm. The initial artifact download contacts Hugging Face but does not contain answer text; pre-cache it before an offline presentation. Wait for that first load (roughly 360 MB is cached locally), then run one text question and select **Play answer** before presenting. `af_bella` is the practical alternate narrator to audition. The full answer retains complete sentences up to 1,000 characters; Kokoro reads the concise `spoken_answer` while the full evidence stays visible. Synthesis keeps a separate 1,200-character hard guard. The browser buffers one WAV response rather than word-by-word streaming.
 
 For this demo, use the curated pretrained narrator instead of a custom fine-tune. Fine-tuning needs a licensed, consented voice dataset plus evaluation time, and it does not remove model warm-up or response-generation latency.
 
