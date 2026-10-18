@@ -185,6 +185,64 @@ function sourceElement(source) {
   return card;
 }
 
+async function addStarterSample(sample, button) {
+  const assistantId = state.active?.id;
+  const existingSources = state.active?.sources || [];
+  if (!assistantId) return;
+  button.disabled = true;
+  message($("#source-message"), `Adding ${sample.title}…`);
+  try {
+    const response = await fetch(sample.download_url, { credentials: "same-origin" });
+    if (!response.ok) throw new Error(`Sample download failed (${response.status}).`);
+    const extensionAt = sample.filename.lastIndexOf(".");
+    const stem = extensionAt < 0 ? sample.filename : sample.filename.slice(0, extensionAt);
+    const extension = extensionAt < 0 ? "" : sample.filename.slice(extensionAt);
+    let copy = 1;
+    let filename = `Sample - ${stem}${extension}`;
+    while (existingSources.some((source) => source.name.toLowerCase() === filename.toLowerCase())) {
+      filename = `Sample - ${stem} (${++copy})${extension}`;
+    }
+    const file = new File([await response.blob()], filename, {
+      type: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    });
+    const data = new FormData();
+    data.append("file", file);
+    const result = await api(`/api/assistants/${assistantId}/sources/files`, { method: "POST", body: data });
+    if (state.active?.id === assistantId) {
+      await refreshAssistant();
+      message($("#source-message"), result.status === "unchanged"
+        ? `${sample.title} is already in this assistant.`
+        : `${sample.title} added. Review and approve it before asking questions.`, true);
+    }
+  } catch (error) {
+    if (state.active?.id === assistantId) message($("#source-message"), error.message);
+  } finally { button.disabled = false; }
+}
+
+async function loadStarterSamples() {
+  const list = $("#starter-sample-list");
+  try {
+    const samples = await api("/api/pitch/samples");
+    list.replaceChildren(...samples.map((sample) => {
+      const card = document.createElement("article");
+      card.className = "starter-sample-card";
+      const title = document.createElement("strong");
+      title.textContent = sample.title;
+      const description = document.createElement("p");
+      description.textContent = sample.tagline;
+      const add = document.createElement("button");
+      add.type = "button";
+      add.className = "secondary-button";
+      add.textContent = "Add sample";
+      add.setAttribute("aria-label", `Add ${sample.title} sample to this assistant`);
+      add.addEventListener("click", () => { void addStarterSample(sample, add); });
+      card.append(title, description, add);
+      return card;
+    }));
+    if (!samples.length) list.textContent = "Sample decks are unavailable. You can still upload your own document.";
+  } catch (_) { list.textContent = "Sample decks are unavailable. You can still upload your own document."; }
+}
+
 function setSharePanel(assistant) {
   const panel = $("#publish-status");
   panel.hidden = !assistant.published;
@@ -451,6 +509,7 @@ async function initialize() {
   $("#shared-question-form").addEventListener("submit", (event) => { event.preventDefault(); ask($("#shared-question-input").value, { shared: true }); });
   const token = location.pathname.match(/^\/s\/([^/]+)$/)?.[1];
   if (token) { bindVoice("#shared-voice-question", "#shared-question-input", "#shared-question-form", "#shared-message"); await initializeShared(); return; }
+  void loadStarterSamples();
   $("#login-tab").addEventListener("click", () => showAuth("login"));
   $("#register-tab").addEventListener("click", () => showAuth("register"));
   $("#auth-form").addEventListener("submit", async (event) => {

@@ -54,7 +54,11 @@ allowed_origins = [
 @app.middleware("http")
 async def require_room_token(request: Request, call_next):
     workspace_api = request.url.path.startswith(("/api/auth/", "/api/assistants", "/api/shared/"))
-    if request.method != "OPTIONS" and not workspace_api and (request.url.path == "/api" or request.url.path.startswith("/api/")):
+    public_sample_asset = request.method == "GET" and (
+        request.url.path == "/api/pitch/samples"
+        or (request.url.path.startswith("/api/pitch/sample/") and request.url.path.endswith("/file"))
+    )
+    if request.method != "OPTIONS" and not workspace_api and not public_sample_asset and (request.url.path == "/api" or request.url.path.startswith("/api/")):
         # The Render launcher fails closed; an empty setting is for loopback development.
         required_token = setting("PITCHROOM_ACCESS_TOKEN")
         if required_token:

@@ -74,6 +74,36 @@ def test_private_assistants_approve_sources_and_isolate_owners(clients):
     assert wrong_owner.status_code == 404
 
 
+def test_starter_deck_enters_private_assistant_unapproved(clients):
+    first, _ = clients
+    assistant = first.post("/api/assistants", json={"name": "Team handbook"}).json()
+    sample = next(item for item in first.get("/api/pitch/samples").json() if item["id"] == "team-handbook")
+    download = first.get(sample["download_url"])
+    assert download.status_code == 200
+
+    upload = first.post(f"/api/assistants/{assistant['id']}/sources/files", files={
+        "file": (
+            f"Sample - {sample['filename']}",
+            download.content,
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        ),
+    })
+    assert upload.status_code == 200
+    assert upload.json()["approved"] is False
+    assert first.get(f"/api/assistants/{assistant['id']}").json()["sources"][0]["approved"] is False
+    assert first.post(f"/api/assistants/{assistant['id']}/answer", json={
+        "question": "How do I get an expense approved?",
+    }).status_code == 409
+
+
+def test_starter_library_is_public_read_only(clients):
+    guest = TestClient(app.app, base_url="http://localhost")
+    samples = guest.get("/api/pitch/samples")
+    assert samples.status_code == 200
+    assert guest.get(samples.json()[0]["download_url"]).status_code == 200
+    assert guest.post("/api/pitch/sample/team-handbook").status_code == 401
+
+
 def test_kokoro_speech_is_limited_to_grounded_owner_and_published_answers(clients, monkeypatch):
     first, second = clients
     assistant = first.post("/api/assistants", json={"name": "Customer guide"}).json()

@@ -8,3 +8,13 @@
 .import-columns strong{font-size:9px;color:var(--ink)}
 .import-columns ul{padding-left:15px;margin:5px 0 0;max-height:160px;overflow:auto;overflow-wrap:anywhere}
 .import-columns li{margin:0 0 5px;line-height:1.4}
+.starter-samples{margin-top:14px;padding:12px;border:1px solid var(--line);border-radius:12px;background:#fbfbf6}
+.starter-samples summary{cursor:pointer;color:var(--ink);font-size:11px;font-weight:700}
+.starter-samples[open] summary{margin-bottom:9px}
+.starter-samples>p{margin:0 0 10px;color:var(--muted);font-size:10px;line-height:1.5}
+.starter-sample-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}
+.starter-sample-card{display:grid;align-content:start;gap:6px;padding:10px;border:1px solid var(--line);border-radius:9px;background:var(--surface)}
+.starter-sample-card strong{font-size:10px;line-height:1.35}
+.starter-sample-card p{margin:0;color:var(--muted);font-size:9px;line-height:1.45}
+.starter-sample-card .secondary-button{justify-self:start;padding:7px 9px;font-size:10px}
+@media(max-width:410px){.starter-sample-list{grid-template-columns:1fr}}
