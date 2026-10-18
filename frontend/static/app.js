@@ -891,7 +891,7 @@ function warmSpeechProvider() {
         return false;
       }
       if (readiness.provider === "kokoro" && readiness.ready) {
-        setVoiceReadiness("Studio voice ready · local English", "ready");
+        setVoiceReadiness("Kokoro voice ready · local English", "ready");
         return true;
       }
       if (readiness.provider === "browser") {
