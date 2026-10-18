@@ -40,25 +40,60 @@ DEMO_SAMPLES = {
         "title": "Weekly project update",
         "tagline": "Answer questions about a cross-team product launch.",
         "filename": "weekly-project-update.pptx",
-        "questions": ["What is blocking the launch?", "What is due this week?"],
+        "questions": ["What is blocking the launch?", "Who owns the export retest, and when?"],
     },
     "customer-plan": {
         "title": "Customer success plan",
         "tagline": "Prepare for a customer kickoff or account review.",
         "filename": "customer-success-plan.pptx",
-        "questions": ["What outcome did the customer agree to?", "What is the next customer milestone?"],
+        "questions": ["What outcome did the customer agree to by day 30?", "Who sends the weekly recap?"],
     },
     "team-handbook": {
         "title": "Team handbook",
         "tagline": "Find the rules for leave, expenses, and team support.",
         "filename": "team-handbook.pptx",
-        "questions": ["How do I get an expense approved?", "Who should I contact when blocked?"],
+        "questions": ["How do I get an expense approved?", "Where should I take a project blocker?"],
     },
     "new-starter": {
         "title": "New starter guide",
         "tagline": "Answer practical questions during the first month at work.",
         "filename": "new-starter-guide.pptx",
-        "questions": ["What should I finish in my first week?", "How do I request system access?"],
+        "questions": ["What should I do in my first week?", "How do I request system access?"],
+    },
+}
+SAMPLE_ASSISTANT_TEMPLATES = {
+    "team-onboarding": {
+        "name": "Team & onboarding guide",
+        "audience": "People & teams",
+        "tagline": "Find everyday answers across a fictional team handbook and first-month guide.",
+        "sample_ids": ["team-handbook", "new-starter"],
+        "questions": [
+            "What should I do in my first week?",
+            "How do I request system access?",
+            "How much notice should I give for planned leave?",
+        ],
+    },
+    "project-delivery": {
+        "name": "Project delivery room",
+        "audience": "Project delivery",
+        "tagline": "Keep a fictional cross-team launch aligned on owners, blockers, and decisions.",
+        "sample_ids": ["project-update"],
+        "questions": [
+            "What is blocking the launch?",
+            "Who owns the export retest, and when?",
+            "What is the fallback if a check fails?",
+        ],
+    },
+    "customer-kickoff": {
+        "name": "Customer kickoff guide",
+        "audience": "Customer success",
+        "tagline": "Prepare for a fictional 30-day customer kickoff with clear outcomes and owners.",
+        "sample_ids": ["customer-plan"],
+        "questions": [
+            "What outcome did the customer agree to by day 30?",
+            "Who sends the weekly recap?",
+            "When will finance approve the sales and returns definitions?",
+        ],
     },
 }
 STOP_WORDS = {
@@ -1246,6 +1281,11 @@ def list_demo_samples() -> list[dict[str, Any]]:
         {"id": sample_id, **sample, "download_url": f"/api/pitch/sample/{sample_id}/file"}
         for sample_id, sample in DEMO_SAMPLES.items()
     ]
+
+
+@router.get("/api/pitch/assistant-templates")
+def list_sample_assistant_templates() -> list[dict[str, Any]]:
+    return [{"id": template_id, **template} for template_id, template in SAMPLE_ASSISTANT_TEMPLATES.items()]
 
 
 @router.post("/api/pitch/sample/{sample_id}")

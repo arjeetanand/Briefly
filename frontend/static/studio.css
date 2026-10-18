@@ -18,3 +18,16 @@
 .starter-sample-card p{margin:0;color:var(--muted);font-size:9px;line-height:1.45}
 .starter-sample-card .secondary-button{justify-self:start;padding:7px 9px;font-size:10px}
 @media(max-width:410px){.starter-sample-list{grid-template-columns:1fr}}
+.starter-template-list{display:grid;gap:8px}
+.starter-template-card{display:grid;gap:7px;padding:12px;border:1px solid var(--line);border-radius:10px;background:var(--surface);transition:transform .18s ease,border-color .18s ease,box-shadow .18s ease}
+.starter-template-card:hover{transform:translateY(-2px);border-color:#c9b5ca;box-shadow:0 8px 20px rgba(41,36,49,.07)}
+.starter-template-audience{color:var(--plum);font-size:8px;font-weight:700;letter-spacing:.1em;text-transform:uppercase}
+.starter-template-card strong{font-size:11px;line-height:1.35}
+.starter-template-card>p{margin:0;color:var(--muted);font-size:9px;line-height:1.5}
+.starter-template-questions{margin:0;padding-left:15px;color:#605a65;font-size:9px;line-height:1.5}
+.starter-template-questions li+li{margin-top:3px}
+.starter-template-card .secondary-button{justify-self:start;padding:8px 10px;font-size:10px}
+.starter-decks{margin-top:11px;padding-top:9px;border-top:1px solid var(--line)}
+.starter-decks summary{cursor:pointer;color:var(--muted);font-size:9px;font-weight:600}
+.starter-decks[open] summary{margin-bottom:8px}
+@media(prefers-reduced-motion:reduce){.starter-template-card{transition:none}.starter-template-card:hover{transform:none}}

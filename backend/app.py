@@ -56,6 +56,7 @@ async def require_room_token(request: Request, call_next):
     workspace_api = request.url.path.startswith(("/api/auth/", "/api/assistants", "/api/shared/"))
     public_sample_asset = request.method == "GET" and (
         request.url.path == "/api/pitch/samples"
+        or request.url.path == "/api/pitch/assistant-templates"
         or (request.url.path.startswith("/api/pitch/sample/") and request.url.path.endswith("/file"))
     )
     if request.method != "OPTIONS" and not workspace_api and not public_sample_asset and (request.url.path == "/api" or request.url.path.startswith("/api/")):

@@ -56,7 +56,7 @@ def test_private_assistants_approve_sources_and_isolate_owners(clients):
         "question": "How many days is that?",
         "history": [
             {"role": "user", "content": "How long do customers have to request a refund?"},
-            {"role": "assistant", "content": answer["answer"]},
+            {"role": "assistant", "content": answer["spoken_answer"]},
         ],
     }).json()
     assert follow_up["grounded"] is True
@@ -65,10 +65,12 @@ def test_private_assistants_approve_sources_and_isolate_owners(clients):
         "question": "Does that include gift orders?",
         "history": [
             {"role": "user", "content": "How long do customers have to request a refund?"},
-            {"role": "assistant", "content": answer["answer"]},
+            {"role": "assistant", "content": answer["spoken_answer"]},
         ],
     }).json()
     assert unsupported_follow_up["grounded"] is False
+    assert unsupported_follow_up["answer"] == unsupported_follow_up["spoken_answer"]
+    assert unsupported_follow_up["source_refs"] == []
 
     wrong_owner = second.post(f"/api/assistants/{assistant['id']}/answer", json={"question": "What is the refund policy?"})
     assert wrong_owner.status_code == 404
@@ -100,8 +102,105 @@ def test_starter_library_is_public_read_only(clients):
     guest = TestClient(app.app, base_url="http://localhost")
     samples = guest.get("/api/pitch/samples")
     assert samples.status_code == 200
+    assert len(guest.get("/api/pitch/assistant-templates").json()) == 3
     assert guest.get(samples.json()[0]["download_url"]).status_code == 200
     assert guest.post("/api/pitch/sample/team-handbook").status_code == 401
+    assert guest.post("/api/assistants/from-sample/team-onboarding").status_code == 401
+
+
+def test_sample_assistant_templates_are_private_reviewable_and_atomic(clients, monkeypatch):
+    first, second = clients
+    templates = first.get("/api/pitch/assistant-templates").json()
+    assert [template["id"] for template in templates] == ["team-onboarding", "project-delivery", "customer-kickoff"]
+    created = first.post("/api/assistants/from-sample/team-onboarding")
+    assert created.status_code == 200
+    assistant = created.json()
+    path = f"/api/assistants/{assistant['id']}"
+    assert assistant["name"] == "Team & onboarding guide"
+    assert {source["metadata"]["sample_id"] for source in assistant["sources"]} == {"team-handbook", "new-starter"}
+    assert all(not source["approved"] for source in assistant["sources"])
+    assert assistant["published"] is False
+    assert first.post(f"{path}/answer", json={"question": "How do I request system access?"}).status_code == 409
+    assert second.get(path).status_code == 404
+
+    store_source = assistants._store_source
+    stored = 0
+
+    def fail_second_source(*args, **kwargs):
+        nonlocal stored
+        stored += 1
+        if stored == 2:
+            raise HTTPException(413, "source limit reached")
+        return store_source(*args, **kwargs)
+
+    monkeypatch.setattr(assistants, "_store_source", fail_second_source)
+    assert first.post("/api/assistants/from-sample/team-onboarding").status_code == 413
+    assert len(first.get("/api/assistants").json()) == 1
+
+
+def test_sample_assistant_suggested_questions_have_named_support(clients):
+    first, _ = clients
+    expected = {
+        "team-onboarding": [
+            ("What should I do in my first week?", "new-starter-guide.pptx", "Slide 3", "review the team handbook"),
+            ("How do I request system access?", "new-starter-guide.pptx", "Slide 4", "Morgan approves or adjusts the request"),
+            ("How much notice should I give for planned leave?", "team-handbook.pptx", "Slide 4", "five working days ahead"),
+        ],
+        "project-delivery": [
+            ("What is blocking the launch?", "weekly-project-update.pptx", "Slide 4", "CSV date bug is the main launch blocker"),
+            ("Who owns the export retest, and when?", "weekly-project-update.pptx", "Slide 4", "Mei owns the fix; a retest is due 18 July"),
+            ("What is the fallback if a check fails?", "weekly-project-update.pptx", "Slide 4", "onboard six teams first"),
+        ],
+        "customer-kickoff": [
+            ("What outcome did the customer agree to by day 30?", "customer-success-plan.pptx", "Slide 2", "at least 14 of the 18 users"),
+            ("Who sends the weekly recap?", "customer-success-plan.pptx", "Slide 5", "sends a written weekly recap"),
+            ("When will finance approve the sales and returns definitions?", "customer-success-plan.pptx", "Slide 6", "Finance will approve them by day 10"),
+        ],
+    }
+    for template_id, questions in expected.items():
+        assistant = first.post(f"/api/assistants/from-sample/{template_id}").json()
+        path = f"/api/assistants/{assistant['id']}"
+        for source in assistant["sources"]:
+            assert first.patch(f"{path}/sources/{source['id']}", json={"approved": True}).status_code == 200
+        for question, filename, citation, evidence in questions:
+            answer = first.post(f"{path}/answer", json={"question": question}).json()
+            assert answer["grounded"] is True
+            assert any(
+                filename in ref["citation"] and citation in ref["citation"] and evidence in ref["text"]
+                for ref in answer["source_refs"]
+            ), (template_id, question, answer["source_refs"])
+        if template_id == "team-onboarding":
+            question = "How do I request system access?"
+            initial = first.post(f"{path}/answer", json={"question": question}).json()
+            follow_up = first.post(f"{path}/answer", json={
+                "question": "And if the request is pending longer than two working days?",
+                "history": [
+                    {"role": "user", "content": question},
+                    {"role": "assistant", "content": initial["spoken_answer"]},
+                ],
+            }).json()
+            assert follow_up["grounded"] is True
+            assert any("new-starter-guide.pptx" in ref["citation"] and "Slide 4" in ref["citation"]
+                       for ref in follow_up["source_refs"])
+            unsupported = first.post(f"{path}/answer", json={
+                "question": "Does it guarantee account access tomorrow?",
+                "history": [
+                    {"role": "user", "content": question},
+                    {"role": "assistant", "content": initial["spoken_answer"]},
+                ],
+            }).json()
+            assert unsupported["grounded"] is False
+            assert unsupported["source_refs"] == []
+            assert unsupported["spoken_answer"] == unsupported["answer"]
+
+    # The published snapshot uses the same source-qualified citations as private answers.
+    assistant = first.post("/api/assistants/from-sample/team-onboarding").json()
+    path = f"/api/assistants/{assistant['id']}"
+    for source in assistant["sources"]:
+        first.patch(f"{path}/sources/{source['id']}", json={"approved": True})
+    token = first.post(f"{path}/publish").json()["url"].split("/")[-1]
+    answer = first.post(f"/api/shared/{token}/answer", json={"question": "How much notice should I give for planned leave?"}).json()
+    assert any("team-handbook.pptx" in ref["citation"] and "Slide 4" in ref["citation"] for ref in answer["source_refs"])
 
 
 def test_kokoro_speech_is_limited_to_grounded_owner_and_published_answers(clients, monkeypatch):

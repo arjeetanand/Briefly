@@ -32,9 +32,12 @@ from pydantic import BaseModel, Field
 from config import setting
 from routes.pitch import (
     BACKEND_DIR,
+    DEMO_SAMPLES,
     DOCUMENT_EXTENSIONS,
     DOCUMENT_TYPES,
     MAX_SPOKEN_REPLY_CHARS,
+    SAMPLE_ASSISTANT_TEMPLATES,
+    SAMPLE_DECK_DIR,
     DocumentStore,
     QuestionRequest,
     SourceSection,
@@ -267,7 +270,7 @@ def _source_store(db: sqlite3.Connection, assistant_id: str, *, approved_only: b
         f"SELECT * FROM sources WHERE assistant_id=?{where} ORDER BY created_at", (assistant_id,)
     ).fetchall()
     sections = [
-        SourceSection(section["text"], section["citation"], section.get("kind", "text"), section.get("url"))
+        SourceSection(section["text"], f"{row['name']} · {section['citation']}", section.get("kind", "text"), section.get("url"))
         for row in rows for section in json.loads(row["sections"])
     ]
     document = DocumentStore(Path("assistant sources"))
@@ -279,7 +282,7 @@ def _source_store(db: sqlite3.Connection, assistant_id: str, *, approved_only: b
 
 def _snapshot_store(snapshot: dict) -> DocumentStore:
     sections = [
-        SourceSection(section["text"], section["citation"], section.get("kind", "text"), section.get("url"))
+        SourceSection(section["text"], f"{source['name']} · {section['citation']}", section.get("kind", "text"), section.get("url"))
         for source in snapshot.get("sources", []) for section in source.get("sections", [])
     ]
     document = DocumentStore(Path("published sources"))
@@ -657,7 +660,7 @@ class ApprovalRequest(BaseModel):
 
 class HistoryMessage(BaseModel):
     role: Literal["user", "assistant"]
-    content: str = Field(max_length=300)
+    content: str = Field(max_length=2000)
 
 
 class AskRequest(BaseModel):
@@ -746,6 +749,49 @@ def create_assistant(payload: AssistantRequest, request: Request) -> dict:
                    (assistant_id, user_id, payload.name.strip(), now, now))
         row = db.execute("SELECT * FROM assistants WHERE id=?", (assistant_id,)).fetchone()
         return _assistant_payload(db, row, include_sources=True)
+
+
+@router.post("/api/assistants/from-sample/{template_id}")
+def create_sample_assistant(template_id: str, request: Request) -> dict:
+    user_id = _user_id(request)
+    template = SAMPLE_ASSISTANT_TEMPLATES.get(template_id)
+    if not template:
+        raise HTTPException(404, "That sample assistant is not available.")
+
+    prepared_sources = []
+    for sample_id in template["sample_ids"]:
+        sample = DEMO_SAMPLES[sample_id]
+        filename = sample["filename"]
+        try:
+            raw = (SAMPLE_DECK_DIR / filename).read_bytes()
+            if len(raw) > _document_upload_limit():
+                raise HTTPException(413, "A bundled sample exceeds the document upload limit.")
+            sections, metadata = _extract_document(
+                raw, filename,
+                "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            )
+            if not sections and not metadata.get("warnings"):
+                raise ValueError("No readable text was found in this sample.")
+        except HTTPException:
+            raise
+        except (OSError, ValueError, zipfile.BadZipFile) as exc:
+            raise HTTPException(503, "The sample assistant could not be prepared.") from exc
+        prepared_sources.append({
+            "name": f"Sample - {filename}",
+            "kind": "file",
+            "sections": sections,
+            "metadata": {**metadata, "demo": True, "sample_id": sample_id, "use_case": template["name"]},
+        })
+
+    assistant_id, now = str(uuid.uuid4()), _now()
+    with _connect() as db:
+        if db.execute("SELECT COUNT(*) FROM assistants WHERE owner_id=?", (user_id,)).fetchone()[0] >= 20:
+            raise HTTPException(429, "This pilot account can have up to 20 assistants.")
+        db.execute("INSERT INTO assistants(id,owner_id,name,created_at,updated_at) VALUES(?,?,?,?,?)",
+                   (assistant_id, user_id, template["name"], now, now))
+        for source in prepared_sources:
+            _store_source(db, assistant_id, source)
+        return _assistant_payload(db, _assistant(db, assistant_id, user_id), include_sources=True)
 
 
 @router.get("/api/assistants/{assistant_id}")
@@ -876,6 +922,7 @@ def _answer(assistant: DocumentStore, payload: AskRequest, db: sqlite3.Connectio
     result["question"] = question
     if not result["grounded"]:
         result["answer"] = "I could not find that in the approved sources."
+        result["spoken_answer"] = result["answer"]
     result["answer_id"] = str(uuid.uuid4())
     result["latency_ms"] = round((time.monotonic() - started) * 1000)
     result["retrieval_mode"] = retrieval_mode

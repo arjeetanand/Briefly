@@ -1,12 +1,15 @@
 const $ = (selector) => document.querySelector(selector);
-const state = { mode: "login", assistants: [], active: null, shareToken: "", history: [], shareUrl: "", sessionId: "", speechAudio: null, speechUrl: "", speechCancel: null, speechAbort: null };
+const state = { mode: "login", assistants: [], active: null, samples: [], sampleTemplates: [], shareToken: "", history: [], shareUrl: "", sessionId: "", speechAudio: null, speechUrl: "", speechCancel: null, speechAbort: null };
 
 async function api(path, options = {}) {
   const response = await fetch(path, { credentials: "same-origin", ...options,
     headers: { Accept: "application/json", ...(options.headers || {}) } });
   let body = {};
   try { body = await response.json(); } catch (_) { /* show a plain HTTP error below */ }
-  if (!response.ok) throw new Error(body.detail || `Request failed (${response.status}).`);
+  if (!response.ok) {
+    const detail = Array.isArray(body.detail) ? body.detail.map((item) => item.msg).filter(Boolean).join(" ") : body.detail;
+    throw new Error(detail || `Request failed (${response.status}).`);
+  }
   return body;
 }
 
@@ -219,10 +222,83 @@ async function addStarterSample(sample, button) {
   } finally { button.disabled = false; }
 }
 
+function renderEmptyConversation(assistant) {
+  const empty = document.createElement("div");
+  empty.className = "conversation-empty";
+  const copy = document.createElement("p");
+  const approved = assistant.sources.some((source) => source.approved);
+  copy.textContent = assistant.sources.length
+    ? approved ? "Ask about the approved materials. Follow each answer back to its source."
+      : "Review and approve at least one source to start asking questions."
+    : "Add a website or document to start. New sources stay out of answers until you approve them.";
+  empty.append(copy);
+  if (approved) {
+    const sampleIds = new Set(assistant.sources.map((source) => source.metadata?.sample_id).filter(Boolean));
+    const template = state.sampleTemplates.find((item) => item.sample_ids.every((id) => sampleIds.has(id))
+      && item.sample_ids.every((id) => assistant.sources.some((source) => source.metadata?.sample_id === id && source.approved)));
+    const questions = template?.questions || ["What are the main points?", "What does this source say about support?"];
+    const chips = document.createElement("div");
+    chips.className = "prompt-chips";
+    questions.forEach((question) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = question;
+      button.addEventListener("click", () => { $("#question-input").value = question; $("#question-form").requestSubmit(); });
+      chips.append(button);
+    });
+    empty.append(chips);
+  }
+  $("#conversation").replaceChildren(empty);
+}
+
+async function createSampleAssistant(template, button) {
+  button.disabled = true;
+  const label = button.textContent;
+  button.textContent = "Creating…";
+  message($("#source-message"), `Preparing ${template.name} with its sample sources…`);
+  try {
+    const created = await api(`/api/assistants/from-sample/${encodeURIComponent(template.id)}`, { method: "POST" });
+    await loadAssistants(created.id);
+    message($("#source-message"), `Created ${template.name}. Review and approve each source before asking questions.`, true);
+  } catch (error) { message($("#source-message"), error.message); }
+  finally { button.disabled = false; button.textContent = label; }
+}
+
 async function loadStarterSamples() {
   const list = $("#starter-sample-list");
+  const templateList = $("#starter-template-list");
   try {
-    const samples = await api("/api/pitch/samples");
+    const [samples, templates] = await Promise.all([
+      api("/api/pitch/samples"), api("/api/pitch/assistant-templates"),
+    ]);
+    state.samples = samples;
+    state.sampleTemplates = templates;
+    templateList.replaceChildren(...templates.map((template) => {
+      const card = document.createElement("article");
+      card.className = "starter-template-card";
+      const audience = document.createElement("span");
+      audience.className = "starter-template-audience";
+      audience.textContent = `${template.audience} · ${template.sample_ids.length} sample source${template.sample_ids.length === 1 ? "" : "s"}`;
+      const title = document.createElement("strong");
+      title.textContent = template.name;
+      const description = document.createElement("p");
+      description.textContent = template.tagline;
+      const questions = document.createElement("ul");
+      questions.className = "starter-template-questions";
+      template.questions.slice(0, 3).forEach((question) => {
+        const item = document.createElement("li");
+        item.textContent = question;
+        questions.append(item);
+      });
+      const create = document.createElement("button");
+      create.type = "button";
+      create.className = "secondary-button";
+      create.textContent = "Create this assistant ↗";
+      create.setAttribute("aria-label", `Create ${template.name} sample assistant`);
+      create.addEventListener("click", () => { void createSampleAssistant(template, create); });
+      card.append(audience, title, description, questions, create);
+      return card;
+    }));
     list.replaceChildren(...samples.map((sample) => {
       const card = document.createElement("article");
       card.className = "starter-sample-card";
@@ -233,14 +309,20 @@ async function loadStarterSamples() {
       const add = document.createElement("button");
       add.type = "button";
       add.className = "secondary-button";
-      add.textContent = "Add sample";
+      add.textContent = "Add this deck";
       add.setAttribute("aria-label", `Add ${sample.title} sample to this assistant`);
       add.addEventListener("click", () => { void addStarterSample(sample, add); });
       card.append(title, description, add);
       return card;
     }));
+    if (!templates.length) templateList.textContent = "Sample assistants are unavailable. You can still add your own sources.";
     if (!samples.length) list.textContent = "Sample decks are unavailable. You can still upload your own document.";
-  } catch (_) { list.textContent = "Sample decks are unavailable. You can still upload your own document."; }
+    if (state.active && $("#conversation .conversation-empty")) renderEmptyConversation(state.active);
+  } catch (_) {
+    const unavailable = "Sample assistants are unavailable right now. You can still add your own sources.";
+    templateList.textContent = unavailable;
+    list.textContent = unavailable;
+  }
 }
 
 function setSharePanel(assistant) {
@@ -267,6 +349,7 @@ async function openAssistant(id) {
   $("#assistant-list").replaceChildren(...state.assistants.map(assistantButton));
   $("#assistant-name").value = assistant.name;
   const approved = assistant.sources.filter((source) => source.approved).length;
+  renderEmptyConversation(assistant);
   $("#assistant-summary").textContent = `${approved} approved · ${assistant.sources.length - approved} to review · ${assistant.sources.length} total source${assistant.sources.length === 1 ? "" : "s"}`;
   $("#source-count").textContent = assistant.sources.length;
   $("#source-list").replaceChildren(...(assistant.sources.length ? assistant.sources.map(sourceElement) : [Object.assign(document.createElement("p"), { className: "empty-note", textContent: "Add a website or document to start. New sources stay out of answers until you approve them." })]));
@@ -382,7 +465,8 @@ async function speak(text, answerId, shared) {
 function appendAnswer(container, result, onFeedback, shared, status) {
   const answer = document.createElement("div");
   answer.className = "message message-answer";
-  answer.append(document.createTextNode(result.answer || "I could not find that in the approved sources."));
+  const displayAnswer = result.grounded ? result.spoken_answer || result.answer : result.answer || result.spoken_answer;
+  answer.append(document.createTextNode(displayAnswer || "I could not find that in the approved sources."));
   renderSources(answer, result);
   const feedback = document.createElement("div");
   feedback.className = "answer-feedback";
@@ -439,7 +523,7 @@ async function ask(question, options = {}) {
     const path = shared ? `/api/shared/${encodeURIComponent(state.shareToken)}/answer` : `/api/assistants/${state.active.id}/answer`;
     const result = await api(path, { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ question: trimmed, history: state.history, session_id: state.sessionId }) });
-    state.history.push({ role: "user", content: trimmed }, { role: "assistant", content: result.answer || "" });
+    state.history.push({ role: "user", content: trimmed }, { role: "assistant", content: result.grounded ? result.spoken_answer || result.answer || "" : result.answer || "" });
     state.history = state.history.slice(-8);
     appendAnswer(transcript, result, async (answerId, rating, button) => {
       try { await api(shared ? `/api/shared/${encodeURIComponent(state.shareToken)}/feedback` : `/api/assistants/${state.active.id}/feedback`, {
