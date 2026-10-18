@@ -1,0 +1,40 @@
+.film-section {
+  display: grid;
+  grid-template-columns: minmax(260px, .62fr) minmax(0, 1.38fr);
+  align-items: center;
+  gap: clamp(42px, 7vw, 112px);
+  padding: 112px max(64px, calc((100vw - 1440px) / 2));
+  color: #f8f6ef;
+  background: radial-gradient(ellipse at 74% 22%, #624386 0, transparent 42%), #211831;
+}
+.film-section .eyebrow { color: #d6c2ed; }
+.film-copy h2 { max-width: 480px; margin: 0; color: #f8f6ef; font: 400 clamp(50px, 5vw, 74px)/.98 "DM Serif Display", Georgia, serif; letter-spacing: -.045em; }
+.film-copy > p:not(.eyebrow) { max-width: 440px; margin: 24px 0 0; color: #ded6e5; font-size: 17px; line-height: 1.65; }
+.film-cta { display: inline-flex; align-items: center; gap: 16px; margin-top: 32px; color: #fff; font-size: 14px; text-underline-offset: 6px; }
+.film-cta span { font-size: 20px; transition: transform .25s ease; }
+.film-cta:hover span { transform: translateX(5px); }
+.film-player { min-width: 0; margin: 0; overflow: hidden; border: 1px solid #b3a1c32e; border-radius: 20px; background: #17121e; box-shadow: 0 28px 80px #0f091a4d; }
+.film-player video { display: block; width: 100%; aspect-ratio: 16 / 9; background: #f8f6ef; object-fit: cover; }
+.film-player video:focus-visible, .film-transcript summary:focus-visible { outline: 3px solid #c2a5e9; outline-offset: 4px; }
+.film-player figcaption { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px 20px; padding: 16px 20px 10px; color: #d7cce0; font-size: 12px; letter-spacing: .05em; }
+.film-captions { color: #fff; font-size: 12px; letter-spacing: 0; text-underline-offset: 4px; }
+.film-transcript { padding: 0 20px 17px; color: #e9e1ef; font-size: 13px; line-height: 1.6; }
+.film-transcript summary { width: fit-content; cursor: pointer; color: #fff; text-decoration: underline; text-underline-offset: 4px; }
+.film-transcript ol { display: grid; gap: 8px; margin: 14px 0 0; padding-left: 21px; }
+.film-transcript li { padding-left: 4px; }
+@media (max-width: 980px) {
+  .film-section { grid-template-columns: 1fr; gap: 40px; padding: 84px 32px; }
+  .film-copy h2, .film-copy > p:not(.eyebrow) { max-width: 720px; }
+  .film-player { width: 100%; }
+}
+@media (max-width: 760px) {
+  .film-section { padding: 67px 24px; }
+  .film-copy h2 { font-size: clamp(43px, 11vw, 62px); }
+  .film-copy > p:not(.eyebrow) { font-size: 15px; }
+  .film-player { border-radius: 14px; }
+  .film-player figcaption { padding: 12px 14px 8px; font-size: 10px; }
+  .film-transcript { padding-inline: 14px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .film-cta span { transition: none; }
+}

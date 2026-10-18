@@ -1,0 +1,30 @@
+{
+  "01-intro": {
+    "audioFrames": 174,
+    "durationInFrames": 198
+  },
+  "02-sources": {
+    "audioFrames": 193,
+    "durationInFrames": 217
+  },
+  "03-voice": {
+    "audioFrames": 174,
+    "durationInFrames": 198
+  },
+  "04-evidence": {
+    "audioFrames": 215,
+    "durationInFrames": 239
+  },
+  "05-boundary": {
+    "audioFrames": 202,
+    "durationInFrames": 226
+  },
+  "06-use-cases": {
+    "audioFrames": 177,
+    "durationInFrames": 201
+  },
+  "07-publish": {
+    "audioFrames": 300,
+    "durationInFrames": 324
+  }
+}

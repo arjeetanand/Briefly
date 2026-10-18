@@ -1,0 +1,65 @@
+[
+  {
+    "id": "01-intro",
+    "eyebrow": "PITCHROOM AI · A ONE-MINUTE TOUR",
+    "title": "Your knowledge.\nIn conversation.",
+    "note": "A calmer way to find what matters.",
+    "visual": "intro",
+    "voiceover": "Your work already holds the answers. Pitchroom brings them into one clear conversation.",
+    "subtitle": "Your work already holds the answers.\nPitchroom brings them into one clear conversation."
+  },
+  {
+    "id": "02-sources",
+    "eyebrow": "01 / ADD YOUR MATERIAL",
+    "title": "Start with what you trust.",
+    "note": "Websites · PDFs · presentations · guides",
+    "visual": "sources",
+    "voiceover": "Add a website, a presentation, or a guide. Review each source before your assistant uses it.",
+    "subtitle": "Add a website, a presentation, or a guide.\nReview each source before your assistant uses it."
+  },
+  {
+    "id": "03-voice",
+    "eyebrow": "02 / ASK BY VOICE OR TEXT",
+    "title": "Ask the way you think.",
+    "note": "Speak naturally. Type whenever you want.",
+    "visual": "voice",
+    "voiceover": "Ask a question by voice or text. Follow up naturally, without searching through files.",
+    "subtitle": "Ask a question by voice or text.\nFollow up naturally, without searching through files."
+  },
+  {
+    "id": "04-evidence",
+    "eyebrow": "03 / EVERY ANSWER HAS A SOURCE",
+    "title": "Evidence, in reach.",
+    "note": "Open the page, slide, or section behind the answer.",
+    "visual": "evidence",
+    "voiceover": "Every answer links to its page, slide, or section. Open the evidence and check the original context.",
+    "subtitle": "Every answer links to its page, slide, or section.\nOpen the evidence and check the original context."
+  },
+  {
+    "id": "05-boundary",
+    "eyebrow": "04 / GROUNDED BY DESIGN",
+    "title": "And when it isn't there?",
+    "note": "No guessing beyond what you approved.",
+    "visual": "boundary",
+    "voiceover": "If your material doesn't answer, Pitchroom says so. It stays inside approved sources instead of guessing.",
+    "subtitle": "If your material doesn't answer, Pitchroom says so.\nIt stays inside approved sources instead of guessing."
+  },
+  {
+    "id": "06-use-cases",
+    "eyebrow": "ONE WORKFLOW, MORE USE CASES",
+    "title": "Fits the work you already do.",
+    "note": "Teams · Courses · Services · Projects",
+    "visual": "use-cases",
+    "voiceover": "Use the same simple flow for a team handbook, a course, a service guide, or a project.",
+    "subtitle": "Use the same simple flow for a team handbook,\na course, a service guide, or a project."
+  },
+  {
+    "id": "07-publish",
+    "eyebrow": "PRIVATE UNTIL YOU PUBLISH",
+    "title": "Ready when you are.",
+    "note": "Share an approved snapshot. Revoke its link anytime.",
+    "visual": "publish",
+    "voiceover": "Keep your assistant private as you build. Publish an approved snapshot when it's ready, and revoke its link any time. Pitchroom. Bring your knowledge into the room.",
+    "subtitle": "Keep your assistant private as you build. Publish an approved snapshot\nwhen it's ready, and revoke its link any time. Pitchroom. Bring your knowledge into the room."
+  }
+]

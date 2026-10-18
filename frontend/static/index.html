@@ -12,6 +12,7 @@
     <link rel="stylesheet" href="/static/styles.css?v=sample-picker-v2" />
     <link rel="stylesheet" href="/static/spoken-page.css?v=6" />
     <link rel="stylesheet" href="/static/theme.css?v=3" />
+    <link rel="stylesheet" href="/static/feature-film.css?v=2" />
   </head>
   <body>
     <a id="skip-link" class="skip-link" href="#live-stage">Skip to live demo</a>
@@ -21,7 +22,7 @@
           <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 28 28" fill="none"><path d="M6 15.25v2.5M10 10.5v7M14 6.5v15M18 10.5v7M22 15.25v2.5" stroke="currentColor" stroke-linecap="round" stroke-width="2.25" /></svg></span>
           <span>Pitchroom AI</span>
         </a>
-        <nav class="topnav" aria-label="Primary navigation"><a href="#how-it-works">How it works</a><a href="#live-stage">Try the demo</a><a href="/studio">Build an assistant</a></nav>
+        <nav class="topnav" aria-label="Primary navigation"><a href="#how-it-works">How it works</a><a href="#feature-film">Watch the tour</a><a href="#live-stage">Try the demo</a><a href="/studio">Build an assistant</a></nav>
         <a class="button button-primary button-header" href="/studio">Create an assistant <span aria-hidden="true">→</span></a>
       </div>
     </header>
@@ -53,6 +54,34 @@
       <section id="how-it-works" class="story-section how-section" data-scene="1" aria-labelledby="how-title">
         <div data-reveal><p class="eyebrow">01 / How it works</p><h2 id="how-title">From your sources<br />to a conversation.</h2></div>
         <ol class="how-steps"><li data-reveal><span>1</span><p>Bring your material</p><img src="/static/assets/document-text.svg" width="44" height="44" alt="" aria-hidden="true" /></li><li data-reveal><span>2</span><p>Ask naturally</p><img src="/static/assets/chat-bubble-left-right.svg" width="44" height="44" alt="" aria-hidden="true" /></li><li data-reveal><span>3</span><p>Follow the source</p><img src="/static/assets/document-magnifying-glass.svg" width="44" height="44" alt="" aria-hidden="true" /></li></ol>
+      </section>
+
+      <section id="feature-film" class="film-section" aria-labelledby="film-title">
+        <div class="film-copy" data-reveal>
+          <p class="eyebrow">A one-minute product tour</p>
+          <h2 id="film-title">Hear how it works.</h2>
+          <p>From a source you approve to an answer you can check. Narrated in Pitchroom’s Kokoro voice.</p>
+          <a class="film-cta" href="/studio">Make an assistant from your material <span aria-hidden="true">→</span></a>
+        </div>
+        <figure class="film-player" data-reveal>
+          <video controls playsinline preload="metadata" poster="/static/assets/pitchroom-feature-explainer-poster.jpg" aria-label="Pitchroom AI feature tour with Kokoro narration and English captions">
+            <source src="/static/assets/pitchroom-feature-explainer.mp4" type="video/mp4" />
+            Your browser cannot play the product tour. Read its transcript below.
+          </video>
+          <figcaption><span>Voice and text · approved sources · evidence · private sharing</span><a class="film-captions" href="/static/assets/pitchroom-feature-explainer.vtt" download>Download captions</a></figcaption>
+          <details class="film-transcript">
+            <summary>Read the video transcript</summary>
+            <ol>
+              <li>Your work already holds the answers. Pitchroom brings them into one clear conversation.</li>
+              <li>Add a website, a presentation, or a guide. Review each source before your assistant uses it.</li>
+              <li>Ask a question by voice or text. Follow up naturally, without searching through files.</li>
+              <li>Every answer links to its page, slide, or section. Open the evidence and check the original context.</li>
+              <li>If your material doesn't answer, Pitchroom says so. It stays inside approved sources instead of guessing.</li>
+              <li>Use the same simple flow for a team handbook, a course, a service guide, or a project.</li>
+              <li>Keep your assistant private as you build. Publish an approved snapshot when it's ready, and revoke its link any time. Pitchroom. Bring your knowledge into the room.</li>
+            </ol>
+          </details>
+        </figure>
       </section>
 
       <section class="scroll-story" aria-labelledby="story-title">
