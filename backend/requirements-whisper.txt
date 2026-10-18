@@ -1,0 +1,2 @@
+# Optional CPU transcription; install alongside the base or Kokoro requirements.
+faster-whisper>=1.2,<2

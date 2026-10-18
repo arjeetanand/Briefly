@@ -1,0 +1,21 @@
+.env
+.env.*
+!.env.example
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+backend/data/pitchroom.sqlite3*
+.DS_Store
+
+# Local design/reference repositories. They are not part of PitchVoiceAI.
+motion-primitives/
+threeui/
+
+# Locally generated presentation staging and render previews.
+.codex-finalizer/
+.deck-build/
+
+threeui/
+motion-primitives/
+docs/

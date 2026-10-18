@@ -1,0 +1,16 @@
+fastapi>=0.115,<1
+mcp>=2,<3
+uvicorn[standard]>=0.30,<1
+python-multipart>=0.0.9,<1
+pytest>=8,<9
+httpx>=0.27,<1
+PyMuPDF>=1.24,<2
+python-dotenv>=1.0,<2
+transformers>=4.45,<5
+--extra-index-url https://download.pytorch.org/whl/cpu
+# Render/Linux uses the CPU-only wheel; macOS and other local platforms use the
+# compatible PyPI build instead of the Linux-only +cpu package name.
+torch==2.5.1+cpu; platform_system == "Linux"
+torch==2.5.1; platform_system != "Linux"
+scipy>=1.12,<2
+numpy>=1.26,<3

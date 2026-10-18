@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: pitchvoice-ai
+    runtime: python
+    plan: free
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: bash render-start.sh
+    healthCheckPath: /health
+    # Keep deployment settings aligned with the root .env.example. Secrets are
+    # entered in Render's dashboard and are never committed to the repository.
+    envVars:
+      - key: FRONTEND_ORIGINS
+        value: https://pitchvoice-ai.onrender.com
+      - key: HUGGINGFACE_API_TOKEN
+        sync: false
+      - key: ASR_PROVIDER
+        value: huggingface
+      - key: PYTHON_VERSION
+        value: 3.12.11
+      - key: PITCHROOM_ACCESS_TOKEN
+        sync: false
+      - key: TTS_PROVIDER
+        value: browser
+      - key: PITCH_DOCUMENT_PATH
+        value: ./data/pitch.txt
+      - key: HUGGINGFACE_TTS_MODE
+        value: off

@@ -1,0 +1,27 @@
+Pitchroom AI is a source-grounded, voice-first pitch rehearsal assistant.
+
+Pitchroom AI solves the problem that static pitch decks can leave founders unable to answer unexpected questions in live meetings.
+
+When an investor or customer asks an unexpected question, founders can lose time searching slides or improvise a claim that was never approved.
+
+Pitchroom AI helps founder-led startup teams prepare for investor meetings, customer conversations, and internal demos.
+
+Pitchroom AI turns an approved pitch deck or document into a voice conversation by accepting PPTX, selectable-text PDF, DOCX, Markdown, or plain-text sources.
+
+For PPTX files, Pitchroom keeps slide numbers and speaker notes attached to the extracted source sections. For PDFs, it keeps page numbers attached. Image-only slides, scanned pages, and chart screenshots are surfaced as review warnings instead of being treated as reliable evidence.
+
+A live voice turn starts after one microphone permission, ends automatically after a brief pause, is transcribed, matched to relevant source sections, answered from those sections, and returned as spoken audio.
+
+During a spoken reply, a presenter can speak over Pitchroom to interrupt playback and ask the next question; the microphone keeps listening through that new turn.
+
+The current Pitchroom AI experience provides seamless turn-taking, not word-by-word streaming transcription.
+
+Pitchroom AI stays trustworthy by declining when it finds no matching approved-source evidence, and it does not invent traction, pricing, fundraising, or customer facts that are absent from the pitch.
+
+The hackathon prototype supports selectable text from PPTX, PDF, and DOCX sources plus Markdown and plain-text files. It does not yet understand image-only slides, charts, or scanned documents without a review warning.
+
+The active pitch is held in memory for the demo; a production version would add authenticated workspaces, versioning, and encrypted storage.
+
+The working prototype includes document extraction, source-section retrieval, typed questions, browser silence detection, interruption-aware voice turns, provider-backed transcription, and provider-backed speech output.
+
+Pitchroom AI's promise is simple: every answer, from the deck.

@@ -1,0 +1,5 @@
+-r requirements.txt
+-r requirements-whisper.txt
+
+# Local studio voice; the hosted browser-voice deployment stays lean.
+kokoro==0.9.4
