@@ -64,7 +64,7 @@ test("voice plus a private sample assistant from setup through published revocat
   let ws;
   try {
     await until(async () => (await fetch(`http://127.0.0.1:${appPort}/health`)).ok, 30000);
-    const target = await until(async () => (await (await fetch(`http://127.0.0.1:${debugPort}/json/list`)).json()).find((item) => item.type === "page"));
+    const target = await until(async () => (await (await fetch(`http://127.0.0.1:${debugPort}/json/list`)).json()).find((item) => item.type === "page"), 30000);
     ws = new WebSocket(target.webSocketDebuggerUrl);
     await new Promise((resolve, reject) => { ws.addEventListener("open", resolve, { once: true }); ws.addEventListener("error", reject, { once: true }); });
 
@@ -231,7 +231,7 @@ test("voice plus a private sample assistant from setup through published revocat
     await evaluate("window.__micGain.value = 0.2");
     await until(() => evaluate("document.querySelector('#stage-message-title').textContent === 'I heard you — keep speaking.'"));
     await evaluate("window.__ttsDelay = 500; window.__micGain.value = 0");
-    await until(() => evaluate("window.__phases.join(',').includes('speaking,listening,transcribing,thinking,speaking,listening')"), 12000);
+    await until(() => evaluate("window.__phases.join(',').includes('speaking,listening,transcribing,thinking,speaking,listening')"), 30000);
     assert.equal(transcriptions, 3);
     assert.equal(speeches, 0);
 

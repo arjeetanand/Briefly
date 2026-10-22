@@ -52,7 +52,7 @@ python3 -m venv .venv
 cp .env.example .env
 # macOS: brew install tesseract
 # Debian/Ubuntu: sudo apt-get install tesseract-ocr
-./run-dev.sh
+./run.sh
 ```
 
 The Kokoro requirements are the recommended local install. They include the API,
@@ -60,8 +60,12 @@ local Whisper, and the studio voice. Install Tesseract separately to index text
 in scanned PDF pages and diagrams. If you only need typed questions or browser
 speech, install `backend/requirements.txt` instead and set `TTS_PROVIDER=browser`.
 
-Open [http://127.0.0.1:8501](http://127.0.0.1:8501) for the live demo, or visit
-[http://127.0.0.1:8501/studio](http://127.0.0.1:8501/studio) to create a private assistant.
+`./run.sh` uses port 4002 and safely restarts only its own server. The paired
+test ports are 5002 and 6002 (`PORT=5002 ./run.sh` or `PORT=6002 ./run.sh`).
+The existing `./run-dev.sh` command remains available on port 8501.
+
+Open [http://127.0.0.1:4002](http://127.0.0.1:4002) for the live demo, or visit
+[http://127.0.0.1:4002/studio](http://127.0.0.1:4002/studio) to create a private assistant.
 Select a sample source or
 upload your own approved PPTX, PDF, DOCX, Markdown, or TXT work file. Ask one of
 the sample questions or type your own. The answer includes the supporting slide,
@@ -144,7 +148,7 @@ document. The endpoint is intentionally unauthenticated and safe only because
 it is restricted to this public demo brief.
 
 With the local server running, an MCP client can connect to
-`http://127.0.0.1:8501/mcp/`. For a remote ChatGPT/MCP connection, use the HTTPS
+`http://127.0.0.1:4002/mcp/`. For a remote ChatGPT/MCP connection, use the HTTPS
 deployment endpoint `https://pitchvoice-ai.onrender.com/mcp/` after that
 deployment has the MCP changes; ChatGPT cannot reach a local `127.0.0.1`
 server. Connecting a remote endpoint may require enabling developer mode in
@@ -167,6 +171,7 @@ The end-to-end protocol test runs with:
 | `frontend/static/studio.*` | Private assistant studio and public visitor-link experience. |
 | `backend/config.py` | Loads the root `.env` and owns the supported setting names and defaults. |
 | `backend/data/pitch.txt` | Verified demo brief used by **Use demo brief**. |
+| `run.sh` | Restart-safe local server on port 4002 (test ports 5002 and 6002). |
 | `run-dev.sh` | Local development server on port 8501. |
 | `render-start.sh` | Render production start command. |
 
