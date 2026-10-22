@@ -6,6 +6,8 @@
 - GitHub origin: `https://github.com/arjeetanand/Briefly.git`
 - Migration branch: `codex/migrate-briefly-voice`
 - Base commit: `43a7f626e96e90c152c37b880394a3b5a3129373`
+- Migration commit: `9f9c5faab339b03aafee48b8bf48f4ec84ec3f1e`
+- Published branch: `main` (verified against GitHub with `git ls-remote`)
 
 The OneDrive copy's Git metadata had no commit. Its 81 staged file entries all
 matched the base commit's Git blob IDs. The intact local clone at
@@ -50,10 +52,19 @@ ports are 5002 and 6002. The running server uses the local project directory.
 
 ## Finalization status
 
-- Local commit and non-force push to `main`: pending.
-- Move the OneDrive source and `/private/tmp/briefly-voice-migration-stage-20261022`
-  to Trash after confirming the pushed commit: pending.
+- The migration commit was pushed to `main` with a normal fast-forward, and the
+  remote hash was verified. The checkout is clean and tracks `origin/main`.
+- The staging copy is confirmed in
+  `/Users/arjeetanand/.Trash/briefly-voice-migration-stage-20261022`.
+- The OneDrive source remains at
+  `/Users/arjeetanand/Library/CloudStorage/OneDrive-OracleCorporation/projects/pitchDeck`.
+  macOS `trash -v -s` waited more than two minutes without moving it; the helper
+  was stopped after confirming the original folder still existed. No permanent
+  deletion was attempted. Retry **Move to Trash** in Finder once OneDrive's
+  File Provider responds.
 - Codex's saved project entry `briefly` still points to the OneDrive folder.
   The available project-list API cannot edit its path. In Codex, remove or
   repoint that saved entry and add `/Users/arjeetanand/projects/briefly-voice`
   as the local project.
+- The separate local clone at `/Users/arjeetanand/projects/pitchDeck` remains
+  untouched because it is outside the authorized source path.
